@@ -1,165 +1,144 @@
-# FeedRank for Zotero
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Dobby-Was-Free/FeedRank_for_Zotero/main/assets/logo.svg" alt="FeedRank logo" width="120" />
+</p>
 
-**Rank the papers in your Zotero feeds by how relevant they are to your own research — then, if you
-want, mail yourself the best of them once a week.**
+<h1 align="center">FeedRank for Zotero</h1>
 
-FeedRank reads the RSS/Atom feeds you already have in Zotero, asks the model provider you configured
-in Zotero (Awesome GPT) to score each new paper against a research profile you write, and puts the
-result where you already work: a sortable **Score** column, a details section in the item pane, and a
-weekly digest you review before it is sent.
+<p align="center"><strong>Your research feeds, ranked by relevance.</strong></p>
 
-Nothing runs in the background by surprise: scoring happens when you ask for it, or at the one weekly
-moment you set. A **manually** started digest is sent only after you press Send. Turning on
-**automatic sending** gives the scheduled digest standing permission, so those runs do not ask again
-— that is what the setting is for, and it is off by default.
+<p align="center">
+  <a href="https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/releases/latest">Download</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/blob/main/docs/SETTINGS.md">Settings guide</a> ·
+  <a href="#privacy-and-data">Privacy</a> ·
+  <a href="https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/issues">Report an issue</a>
+</p>
 
----
+FeedRank helps you decide what to read next—without leaving Zotero. It scores papers from your existing journal and arXiv feeds against a research profile you write, using the model configured in **Awesome GPT**. Read the scores and explanations in Zotero, or receive a selected digest through your own email account.
 
-## What it does
+**No separate FeedRank account, server, or RSS reader.** Awesome GPT and its configured model are needed for AI scoring; email delivery and journal-metric lookup are optional.
 
-| | |
-|---|---|
-| **Relevance scoring** | Every new item in your feeds gets a 0–100 score with a one-sentence reason, judged against your research profile. |
-| **Score column** | Sort your feed items by relevance like any other column; the number is local, not synced. |
-| **Item pane details** | The score, the reason, the journal metrics behind it, and where they came from — per item. |
-| **Journal metrics (optional)** | Impact factor and related signals from **EasyScholar**, with your own key. Cached locally and mirrored into the item's `Extra` field so they survive without FeedRank. |
-| **Local priority signals** | A bibliometric weight and an arXiv significance reading, folded into one Priority number you control. |
-| **Weekly digest (optional)** | The week's best papers, reviewed by you before sending, delivered through your own SMTP account. |
-| **No account, no server** | There is no FeedRank service. Your profile, keys and scores stay in your own Zotero profile. |
+```text
+Your Zotero feeds → Refresh → AI relevance scoring → Read in Zotero
+                                                        ↓
+                                              Optional email digest
+```
 
-## Requirements
+## What you get
 
-- **Zotero 10** — the add-on is built against Zotero 10's APIs.
-- At least one **feed** in your Zotero library.
-- A **model provider** configured in Zotero (the Awesome GPT bridge) for scoring.
-- Optional: an **EasyScholar** key for journal metrics, and an **SMTP account** for the digest.
+| Feature | How it helps |
+| --- | --- |
+| **Personal relevance scores** | A 0–100 score and a short explanation based on your research interests. |
+| **Results inside Zotero** | A sortable Score column, per-item details, and a combined list of scored articles. |
+| **Flexible scoring** | Process recent feed articles, one feed, or selected library items. Reuse cached scores or explicitly rescore. |
+| **Optional journal context** | Retrieve journal metrics through EasyScholar and adjust their contribution to reading priority. |
+| **Direct email delivery** | Preview a digest and send it through your own SMTP server—no additional email delivery service. |
+| **An optional schedule** | Choose a daily, weekly, or monthly run while Zotero is open. Leave the run time blank for manual use only. |
 
 ## Install
 
-1. Download `FeedRank-<version>.xpi` from [Releases](../../releases).
-2. In Zotero: **Tools → Plugins ⚙ → Install Plugin From File…** and pick the file.
-3. Restart Zotero.
+You need **Zotero 10**, a working **[Awesome GPT](https://github.com/MuiseDestiny/zotero-gpt)** installation with a configured model, and at least one Zotero feed for the feed workflow.
 
-Verify the download (optional, PowerShell):
+1. Download the `.xpi` file from the **[latest release](https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/releases/latest)**, rather than GitHub's source-code ZIP.
+2. In Zotero, open **Tools → Plugins**, select the gear menu, and choose **Install Plugin From File…**
+3. Select the `.xpi` and restart Zotero.
 
-```powershell
-Get-FileHash .\FeedRank-0.3.0.xpi -Algorithm SHA256
-# 875860ECBC5F622179F8E041B3721B721C4C65DE9EF8839A8AF62A230293DD7A
-# 244,685 bytes
+The published release notes report testing on **Windows with Zotero 10**. macOS and Linux have not yet been verified. Model integration can also depend on the installed Awesome GPT version.
+
+For download verification, compare the file's SHA-256 with the digest shown for that exact release asset. Checksums belong to individual builds, not just version names.
+
+## Quick start
+
+### 1. Describe what matters to you
+
+Open **Zotero Settings → FeedRank for Zotero** and edit the research-interest profile. Include your topics, methods, practical goals, and work you would rather deprioritize.
+
+For example, replace the bracketed text in this template:
+
+```text
+My research focuses on [topics and applications].
+Prioritize papers with [methods, experiments, or contributions of interest].
+I am particularly interested in [current research questions].
+Deprioritize [less relevant topics].
 ```
 
-## First run
+This profile is included in scoring requests. Do not enter confidential project details unless you are permitted to send them to your configured model provider.
 
-1. **Write your research profile.** Zotero → Settings → **FeedRank for Zotero** → *Research profile*.
-   Plain prose works best: the topics, methods and trade-offs you care about, and what should be
-   deprioritised. This text is the question every paper is judged against, so it is worth five minutes.
-2. **Score something.** Tools → **FeedRank for Zotero → Score last N days…** (or *Refresh and score*
-   for the usual window). A progress window shows what is happening and can be cancelled.
-3. **Read the results.** The **Score** column sorts your feed items; the item pane shows the reason
-   behind each number.
+### 2. Score a small set first
 
-Optional extras:
+Choose **Tools → FeedRank for Zotero → Refresh and score**. Alternatively, use **Score last N days…** to work with articles Zotero has already collected.
 
-- **Journal metrics** — Settings → FeedRank for Zotero → *EasyScholar*: save your key, then
-  *Update journal info*.
-- **Weekly digest** — Settings → FeedRank for Zotero → *Email delivery*: save your SMTP credentials,
-  use **Test connection** (it sends nothing), then **Send test email** or **Review digest**.
+Set a modest paper limit for the first run. The limit controls how many candidates are scored, so a large backlog may need more than one run. Model calls can incur provider charges.
 
-## Commands
+### 3. Read the results
 
-All under **Tools → FeedRank for Zotero**:
+Sort the **Score** column, select an article to read its explanation, or open **Show scored articles** for the combined results. Use the explicit **Rescore** commands to replace earlier scores.
 
-- **Refresh and score** — refresh your feeds and score everything new, in one cancellable run.
-- **Score last N days…** — score the last N days without a refresh; fills the gaps and keeps the scores you have.
-- **Rescore last N days…** — the same window, but replaces the stored scores: use it after changing your profile.
-- **Show scored articles** — open the in-Zotero list of scored results.
-- **Send weekly digest** — build this week's digest and send it, after your confirmation.
-- **Update journal info** — look up journal metrics for the current scope (needs an EasyScholar key).
-- **Settings…** — open the FeedRank for Zotero pane.
+### Score is not the same as Priority
 
-The same work is available where the papers are:
+**Score** is the model's estimate of relevance to your profile. **Priority** adds a bounded significance bonus and is capped at 100. Depending on the article and available information, that bonus can use journal metrics or model-estimated significance; model estimates are not measured bibliometric facts.
 
-- **Score selected items** — right-click a selection in your library and score exactly those.
-- **Rescore selected items** — the same selection, replacing the stored scores.
-- **Score N days…** / **Rescore N days…** — right-click a feed in the left panel to score that feed's last N days.
+Set the significance weight to **0** to prioritize relevance alone. Neither number establishes scientific quality, correctness, or a paper's actual importance. Use the explanation and original article to make the reading decision.
 
-## Privacy in one paragraph
+## Optional email digest
 
-FeedRank has no backend of its own: no FeedRank server, no account, no telemetry. The providers
-**you** configure receive what their job needs — your research profile and the papers' metadata go
-to the model provider, the publication name and your key go to EasyScholar when you enable that
-lookup, and the digest goes to your own SMTP server. Nothing else leaves your machine. Your SMTP
-password and EasyScholar key are stored only as OS-encrypted ciphertext in Zotero's own credential
-store — never in a preference, and never in readable form in a settings file. Full detail, including
-what a settings file may contain and how to remove it: [`docs/PRIVACY.md`](docs/PRIVACY.md).
+Configure your provider's SMTP hostname, port, security mode, username, authorized sender, recipient, and supported credential in **Email delivery**. Use the connection settings required by your provider; some accounts require an app password or an OAuth token rather than the normal webmail password.
 
-## Settings, backup and reset
+**Test connection** checks the connection and authentication without sending a message. **Send test email** opens a test-message preview. For a real digest, use **Rebuild digest** to prepare content from existing scores, then **Review digest** to inspect it before sending. Set the maximum paper count and minimum relevance score to keep it useful.
 
-Every option is documented, with its default and its effect, in
-[`docs/SETTINGS.md`](docs/SETTINGS.md). The same pane can **save your settings to a file**, **load them
-back**, or **reset everything**. A reset returns settings to their defaults while keeping your cached
-scores.
+**Manual sending and automatic sending are different permissions.** Manual delivery requires a Send action. Enabling automatic delivery gives scheduled runs standing permission to send without another confirmation. Automatic sending is off by default.
 
-> **A settings file is private.** It contains your research profile and your mail identities — SMTP
-> host, username, sender and recipient — in plain text, and it optionally carries your saved
-> credentials as encrypted copies. Do not commit it, attach it to an issue, or put it in a shared
-> folder. The credential copies decrypt only for the OS account that wrote them, but they are still
-> credential material. The export says all of this before it writes anything, and keeps
-> `feedrank-settings*.json` out of this repository by default.
+The schedule supports **Daily, Weekly, and Monthly** repeats. Set a local run time and the applicable day, or leave the time blank to disable automatic runs. Zotero must be running; FeedRank is not an independent background service. Some command labels still say “weekly” even when a different repeat is selected. The [settings guide](https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/blob/main/docs/SETTINGS.md) explains the period and missed-run behavior.
+
+## Optional journal metrics
+
+Enable **EasyScholar journal lookup**, save your own key, and run **Update journal info**. Journal data are cached and can contribute to Priority. Scoring remains available without EasyScholar.
+
+Journal information can also be written to an item's **Extra** field. Unlike the local scoring cache, that metadata may travel with a saved library item through Zotero's normal synchronization or export. Disable lookup and set the significance weight to 0 for a relevance-only workflow.
+
+## Privacy and data
+
+FeedRank runs inside Zotero, but **local execution does not mean offline processing**.
+
+| Connection | Information involved |
+| --- | --- |
+| **Feed publishers, through Zotero** | Requests to the subscriptions you refresh. |
+| **The model configured in Awesome GPT** | Your research profile and the paper metadata included in the scoring prompt, such as titles, abstracts, and authors. |
+| **EasyScholar, when enabled** | Your lookup key and the publication name. |
+| **Your SMTP provider** | Authentication, sender and recipient information, and the email content. A connection test can authenticate without transmitting a message. |
+| **GitHub / GitHub Pages** | Extension-update checks and package downloads through the configured update mechanism. |
+
+The plugin does not require a FeedRank backend account. Scores and caches are stored locally. SMTP and EasyScholar credentials use isolated OS-encrypted storage where available; pay attention to any session-only storage warning. Your model provider's own data-handling terms still apply.
+
+> **Keep settings exports and diagnostics private.** An exported settings file can contain your research profile and email identities in plaintext, plus optional encrypted credential copies. Connection reports can contain usernames, server details, and local paths. Never assume a “sanitized” label makes a report anonymous: review and redact it before sharing. Do not attach raw logs, settings files, Zotero profiles, or credentials to a public issue.
+
+See the [privacy documentation](https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/blob/main/docs/PRIVACY.md) for storage and export details.
 
 ## Troubleshooting
 
-| Symptom | What to check |
-|---|---|
-| No scores appear | Is the research profile filled in, and is a model provider configured in Zotero? Run *Score last N days…* and watch the progress window. |
-| Journal metrics missing | *Update journal info* says so when no EasyScholar key is saved. Add the key, then run it again. |
-| Digest not sent | **Test connection** writes a full SMTP/TLS report — open **Connection log** in the email settings. Use **Copy sanitized log** for anything you share: it does not copy the report at all, it builds a small one from an allowlist (build, TLS mode, protocol stage, cipher names, numeric codes, timings), so identities, addresses, server text and paths are absent by construction. A **raw log is private** — it names your mail server and account — so review and redact it before sharing, and never upload credentials, settings exports or raw logs to a public issue. |
-| Scores look stale | A score belongs to the profile that produced it. Change the profile and the affected scores become re-computable; *Rescore latest articles* replaces them. |
+| Problem | Start here |
+| --- | --- |
+| **No new scores** | Check the profile, model configuration, candidate limit, and date window. Try a small selection and read the progress message. |
+| **The model is unavailable** | Check that Awesome GPT works independently and note both plugin versions when reporting the problem. |
+| **Email does not send** | Use Test connection and check the provider's SMTP, authentication, and account-policy requirements. Server acceptance does not guarantee inbox delivery. |
+| **A scheduled run did not happen** | Confirm Zotero was open, the local run time is set, and the selected repeat/day is correct. |
+| **Scores no longer fit your interests** | Update the profile and rescore the relevant articles. |
+
+For a bug report, include your operating system, Zotero and plugin versions, reproduction steps, and a short **manually reviewed** error excerpt. Do not include your full research profile or account details. Until the diagnostics-sharing path has been fixed and tested, do not rely on **Copy sanitized log** to remove private information.
 
 ## Development
 
+From a source checkout, use Node.js for the offline tests and PowerShell for the packaged build:
+
 ```powershell
-npm test                            # 287 offline tests: no network, no Zotero
-powershell -File tools\build.ps1    # -> dist\FeedRank-<version>.xpi
+npm test
+powershell -File tools\build.ps1
 ```
 
-The build writes `dist/FeedRank-0.3.0.xpi`, reads the version from `manifest.json`, packages a fixed file list (the manifest, the
-bootstrap, `chrome/`, `locale/`) and verifies that every packaged file is byte-identical to its source.
-`tools/state-snapshot.js` records and compares the local score cache, which is how a silent change
-there gets noticed.
+The build reads the version from `manifest.json`, writes `dist/FeedRank-<version>.xpi`, and compares packaged files with their source. Runtime installation does not require Node.js or a separate application.
 
-### Publishing a release
+Keep source, tests, tools, and public documentation in Git. Keep generated packages in Releases and private settings, snapshots, profiles, and raw logs out of the repository. The [test report](https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/blob/main/docs/TEST_REPORT.md) should distinguish offline checks from live Zotero tests.
 
-1. Set the version in `manifest.json` (and `package.json`).
-2. `powershell -File tools\build.ps1` — it packages and then re-opens the archive to compare every
-   file with its source.
-3. Publish the XPI as a GitHub Release asset, tagged `v<version>`.
-4. Add the release to `updates.json`: Zotero reads that file from
-   `applications.zotero.update_url` and offers the new version to installed copies. The
-   `update_link` names the Release asset, so it can be written before the release itself exists.
+## License and acknowledgements
 
-The update manifest is served by GitHub Pages from this repository (Settings → Pages → Deploy
-from a branch → `main` / root). Without Pages, `updates.json` is only a file in the repository
-and no installed copy will ever see it.
-
-## License
-
-MIT — see [`LICENSE`](LICENSE).
-
----
-
-## 中文简介
-
-**FeedRank for Zotero** 把你 Zotero 订阅源里的新论文，按"与你研究的相关性"打分排序，并可选地每周把最相关的论文摘要邮件发给你。
-
-- **评分**：用你自己写的研究简介（Research profile）当作提问，让 Zotero 中已配置的模型给每篇新论文打 0–100 分并给出一句理由。
-- **看结果**：条目列表里的 **Score** 列可直接排序；条目详情面板显示分数、理由以及期刊指标来源。
-- **期刊指标（可选）**：用你自己的 EasyScholar 密钥获取影响因子等信号，本地缓存，并镜像进条目的 `Extra` 字段。
-- **每周摘要（可选）**：用你自己的 SMTP 账号发送，发送前可先审阅；不会自动发出未经你确认的邮件。
-- **隐私**：没有 FeedRank 服务器。SMTP 密码与 EasyScholar 密钥只以**系统加密的密文**存放在 Zotero 凭据库中，绝不明文写入偏好设置或导出的设置文件。
-
-**安装**：从 [Releases](../../releases) 下载 `FeedRank-<version>.xpi` → Zotero 中 **工具 → 插件 → ⚙ → Install Plugin From File…** → 重启 Zotero。
-
-**上手**：设置 → FeedRank for Zotero → 填写研究简介 → 工具 → FeedRank for Zotero → **Score last N days…**
-
-每项设置的含义与默认值见 [`docs/SETTINGS.md`](docs/SETTINGS.md)，数据流向与凭据处理见 [`docs/PRIVACY.md`](docs/PRIVACY.md)。
+[MIT License](https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/blob/main/LICENSE). Built on Zotero's feed workflow, with Awesome GPT integration and optional EasyScholar lookup. FeedRank is an independent community plugin, not an official Zotero product.
