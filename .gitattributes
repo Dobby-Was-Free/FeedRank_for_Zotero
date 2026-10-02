@@ -1,0 +1,7 @@
+# The shipped files are read by Gecko and compared byte for byte by tools/build.ps1, so their line
+# endings must not be rewritten by Git: an XPI built from a CRLF working copy would differ from the
+# source it was verified against.
+* text=auto eol=lf
+*.png binary
+*.xpi binary
+*.ico binary

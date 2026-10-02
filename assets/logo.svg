@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-labelledby="title description">
+  <title id="title">FeedRank for Zotero</title>
+  <desc id="description">Editable vector recreation of the FeedRank logo: a charcoal document with a red folded corner, red RSS waves, ascending relevance bars, and a red AI sparkle. White background.</desc>
+  <rect id="background" width="1254" height="1254" fill="#FFFFFF"/>
+
+  <g id="document-outline" fill="#2A2D32">
+    <path d="M 426,287
+             H 706
+             C 714,287 720,290 726,296
+             L 890,465
+             C 896,471 899,478 899,487
+             V 875
+             C 899,910 872,937 837,937
+             H 600
+             C 597,937 594,934 594,931
+             V 898
+             H 834
+             C 848,898 859,887 859,872
+             V 489
+             H 738
+             C 706,489 688,470 688,439
+             V 326
+             H 431
+             C 417,326 406,337 406,351
+             V 606
+             L 366,594
+             V 351
+             C 366,315 392,287 426,287 Z"/>
+  </g>
+
+  <g id="folded-corner" fill="#BA1728">
+    <path d="M 722,338 L 836,455 H 739
+             C 729,455 722,448 722,438 Z"/>
+  </g>
+
+  <g id="document-lines" fill="#BDBDBE">
+    <rect x="464" y="426" width="171" height="35" rx="17.5"/>
+    <rect x="464" y="504" width="215" height="35" rx="17.5"/>
+    <rect x="464" y="581" width="308" height="35" rx="17.5"/>
+  </g>
+
+  <g id="rss-feed" fill="#BA1728">
+    <path id="rss-outer-wave"
+          d="M 279,616
+             C 437,616 564,744 564,902
+             V 914
+             C 564,922 558,928 550,928
+             H 518
+             C 510,928 504,922 504,914
+             V 904
+             C 504,778 405,678 280,678
+             H 279
+             C 271,678 265,672 265,664
+             V 630
+             C 265,622 271,616 279,616 Z"/>
+    <path id="rss-inner-wave"
+          d="M 279,719
+             C 383,719 466,803 466,905
+             V 914
+             C 466,922 460,928 452,928
+             H 420
+             C 412,928 406,922 406,914
+             V 906
+             C 406,836 351,781 281,781
+             H 279
+             C 271,781 265,775 265,767
+             V 733
+             C 265,725 271,719 279,719 Z"/>
+    <circle id="rss-dot" cx="303.5" cy="879.5" r="49.5"/>
+  </g>
+
+  <g id="relevance-bars">
+    <rect x="602" y="797" width="59" height="70" rx="8" fill="#BCBCBD"/>
+    <rect x="681" y="749" width="59" height="118" rx="8" fill="#7C7F82"/>
+    <rect x="761" y="693" width="58" height="174" rx="9" fill="#BA1728"/>
+  </g>
+
+  <g id="ai-sparkle" fill="#BA1728">
+    <path d="M 928,242
+             C 929,234 937,234 939,242
+             C 951,308 961,322 1027,337
+             C 1034,339 1034,347 1027,349
+             C 964,363 951,382 939,438
+             C 937,447 929,447 927,438
+             C 915,380 901,363 840,349
+             C 833,347 833,340 840,338
+             C 901,324 915,308 928,242 Z"/>
+  </g>
+</svg>

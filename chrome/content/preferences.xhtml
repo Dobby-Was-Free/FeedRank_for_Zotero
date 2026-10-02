@@ -1,0 +1,572 @@
+<vbox id="feed-ranker-preferences" class="main-section"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      onload="Zotero.FeedRankerPreferencePane.init(this)"
+      onshowing="Zotero.FeedRankerPreferencePane.populate(this)">
+  <html:style>
+    /* ---- measures -------------------------------------------------------- */
+    /* One setting per row, and every row shares the same two edges: a fixed
+       label column, then the control column. EVERY box is then the same size --
+       same width, same height -- so no field is wider or taller than its
+       neighbours, whatever it holds. Two number boxes of different widths was
+       the remaining complaint, and a mixed height is what made boxes look like
+       they sat at different levels. */
+    #feed-ranker-preferences {
+      /* A deliberately short label column, so the control column -- and the
+         button rows that share its left edge -- start well left of the middle
+         and every button group fits without wrapping. */
+      --feed-ranker-label: 170px;   /* the label column, shared by every row */
+      --feed-ranker-gap: 12px;      /* between a label and its control */
+      --feed-ranker-control: 180px; /* every box: number, text, password, select */
+      --feed-ranker-control-height: 26px;
+    }
+
+    /* ---- first stage: group headings ------------------------------------ */
+    /* Each groupbox is a stage-1 section. Its heading is large, and a rule sits
+       directly under it so the break between stage-1 settings is unmistakable
+       rather than looking like extra row spacing. */
+    #feed-ranker-preferences .feed-ranker-group-head {
+      font-size: 1.3em;
+      font-weight: 700;
+      letter-spacing: .01em;
+      margin: 0 0 4px;
+      padding: 0 0 8px;
+      border-bottom: 2px solid color-mix(in srgb, CanvasText 32%, transparent);
+    }
+    #feed-ranker-preferences groupbox { margin-top: 26px; }
+
+    /* ---- second stage: sub-headings ------------------------------------- */
+    /* Halfway between a stage-1 heading and a field label, in its own row and
+       spanning the FULL width so its rule cannot be clipped by a grid column. */
+    #feed-ranker-preferences .feed-ranker-subhead {
+      grid-column: 1 / -1;
+      width: 100%;
+      font-size: 1.06em;
+      font-weight: 700;
+      margin: 18px 0 0;
+      padding-top: 12px;
+      border-top: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+    }
+
+    /* ---- the aligned form ----------------------------------------------- */
+    #feed-ranker-preferences .feed-ranker-form {
+      display: grid;
+      grid-template-columns: var(--feed-ranker-label) minmax(0, 1fr);
+      column-gap: var(--feed-ranker-gap);
+      row-gap: 10px;
+      align-items: start;
+      margin-top: 8px;
+    }
+    /* A field is exactly two grid items: its label, then its control. Nothing
+       wraps them, so the two columns cannot drift row to row. */
+    #feed-ranker-preferences .feed-ranker-form > label {
+      justify-self: start;
+      /* The first label line is centred on the box beside it: a 26px control
+         holds one 18px line, so 4px of padding puts both on the same level. */
+      padding-top: 4px;
+      line-height: 1.35;
+    }
+    #feed-ranker-preferences .feed-ranker-form > .feed-ranker-ctl {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    #feed-ranker-preferences .feed-ranker-form > .full-width { grid-column: 1 / -1; }
+
+    /* One box, one size. `font: inherit` keeps Zotero's own control font, and the
+       explicit height is what keeps a select from sitting a few pixels off the
+       text inputs beside it. */
+    #feed-ranker-preferences .feed-ranker-form input[type="text"],
+    #feed-ranker-preferences .feed-ranker-form input[type="number"],
+    #feed-ranker-preferences .feed-ranker-form input[type="password"],
+    #feed-ranker-preferences .feed-ranker-form input[type="email"],
+    #feed-ranker-preferences .feed-ranker-form select {
+      box-sizing: border-box;
+      width: var(--feed-ranker-control);
+      max-width: 100%;
+      height: var(--feed-ranker-control-height);
+      min-height: var(--feed-ranker-control-height);
+      padding: 0 6px;
+      font: inherit;
+      vertical-align: middle;
+    }
+    /* A select in this build draws its own arrow inside the box; without this it
+       reserves more room and its text sits lower than a text input's. */
+    #feed-ranker-preferences .feed-ranker-form select {
+      padding-inline-end: 4px;
+    }
+
+    /* ---- long text boxes: FULL WIDTH ------------------------------------ */
+    #feed-ranker-preferences textarea {
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+      font: inherit;
+      resize: vertical;
+      min-height: 2.6em;
+      max-height: 260px;
+      overflow: auto;
+    }
+    #feed-ranker-preferences #feed-ranker-profile { min-height: 92px; }
+    #feed-ranker-preferences #feed-ranker-arxiv-significance-signals { min-height: 60px; }
+    #feed-ranker-preferences #feed-ranker-email-preview {
+      min-height: 130px;
+      max-height: 320px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .9em;
+      white-space: pre;
+    }
+    /* The prompt preview is the one box that must never wrap badly or scroll
+       sideways: it is one instruction sentence per line separated by blank lines,
+       and the payload line is far wider than any pane. `pre` preserved the breaks
+       but the default leading made the blank lines read as uneven gaps, and it
+       forced a horizontal scrollbar instead of wrapping. */
+    #feed-ranker-preferences #feed-ranker-prompt-preview {
+      min-height: 320px;
+      max-height: 620px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .9em;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      overflow: auto;
+      tab-size: 2;
+    }
+
+    /* ---- checkbox rows --------------------------------------------------- */
+    /* A checkbox is NOT sized like an input: `width` from the rules above made
+       the box stretch across the row and pushed its own text to the far edge,
+       which is what left tick boxes "not on the same line". */
+    #feed-ranker-preferences .feed-ranker-check {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-weight: 400;
+    }
+    #feed-ranker-preferences .feed-ranker-check input {
+      flex: 0 0 auto;
+      width: auto;
+      height: auto;
+      min-height: 0;
+      margin: 2px 0 0;
+      padding: 0;
+    }
+    /* A hint under a checkbox lines up with the text, not with the tick. */
+    #feed-ranker-preferences .feed-ranker-check + .feed-ranker-hint { margin-left: 24px; }
+
+    /* ---- collapsible read-only block ------------------------------------ */
+    #feed-ranker-preferences .feed-ranker-fold { grid-column: 1 / -1; width: 100%; }
+    #feed-ranker-preferences .feed-ranker-fold > .feed-ranker-fold-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 0 0;
+      padding-top: 12px;
+      border-top: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+      font-size: 1.06em;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+    }
+    #feed-ranker-preferences .feed-ranker-fold > .feed-ranker-fold-body { margin-top: 8px; }
+    #feed-ranker-preferences .feed-ranker-fold:not([open]) > .feed-ranker-fold-body { display: none; }
+    #feed-ranker-preferences .feed-ranker-fold > .feed-ranker-fold-head::after {
+      content: "▸";
+      font-weight: 400;
+      opacity: .7;
+    }
+    #feed-ranker-preferences .feed-ranker-fold[open] > .feed-ranker-fold-head::after { content: "▾"; }
+
+    #feed-ranker-preferences .feed-ranker-hint {
+      color: color-mix(in srgb, CanvasText 65%, transparent);
+      line-height: 1.4;
+      margin-top: 4px;
+    }
+    /* A read-only value in the control column: same box edges as a real field,
+       so "Last email" reads as part of the same table instead of interrupting it. */
+    #feed-ranker-preferences .feed-ranker-value {
+      line-height: 1.35;
+      padding-top: 4px;
+      overflow-wrap: break-word;
+      word-break: normal;
+    }
+    #feed-ranker-preferences #feed-ranker-save-status {
+      min-height: 1.4em;
+      margin-inline-end: 8px;
+    }
+
+    /* ---- action rows ----------------------------------------------------- */
+    /* The label track and the gap match the form above, so each button row
+       starts on the same edge as the input boxes it saves. */
+    #feed-ranker-preferences .feed-ranker-actions {
+      margin-top: 14px;
+      grid-column: 1 / -1;
+      width: 100%;
+    }
+    #feed-ranker-preferences .feed-ranker-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px var(--feed-ranker-gap);
+      margin-top: 6px;
+    }
+    #feed-ranker-preferences .feed-ranker-action-label {
+      flex: 0 0 var(--feed-ranker-label);
+      font-weight: 600;
+      color: color-mix(in srgb, CanvasText 75%, transparent);
+    }
+    #feed-ranker-preferences #feed-ranker-email-status,
+    #feed-ranker-preferences #feed-ranker-journal-status {
+      min-height: 1.4em;
+      display: block;
+    }
+  </html:style>
+
+  <groupbox aria-labelledby="feed-ranker-settings-title">
+    <label><html:h2 id="feed-ranker-settings-title" class="feed-ranker-group-head" data-i18n="pane.preferences.scoring-settings">Scoring settings</html:h2></label>
+    <description data-i18n="pane.preferences.your-research-feeds-ranked">Your research feeds, ranked by relevance. Every setting is explained in docs/SETTINGS.md.</description>
+    <html:div class="feed-ranker-form">
+      <html:div class="full-width">
+        <html:label for="feed-ranker-profile">Research interest profile</html:label>
+        <html:textarea id="feed-ranker-profile"></html:textarea>
+        <html:div class="feed-ranker-hint">Changing this profile invalidates matching cached scores; Zotero item metadata is never changed.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-language">Explanation language</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:select id="feed-ranker-language">
+          <html:option value="zh-CN">Chinese (Simplified)</html:option>
+          <html:option value="en">English</html:option>
+        </html:select>
+      </html:div>
+
+      <html:label for="feed-ranker-lookback">Lookback days (0–365)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-lookback" type="number" min="0" max="365"/>
+      </html:div>
+
+      <html:label for="feed-ranker-limit">Papers scored per refresh (1–500)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-limit" type="number" min="1" max="500"/>
+        <html:div class="feed-ranker-hint">Every item in the lookback window is checked; only this many newest are sent to the model.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-batch">Papers per Awesome GPT call (1–50)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-batch" type="number" min="1" max="50"/>
+        <html:div class="feed-ranker-hint">Fewer, larger calls are much faster than many small ones.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-concurrency">Requests at once (1–3)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-concurrency" type="number" min="1" max="3"/>
+        <html:div class="feed-ranker-hint">Overlaps the waiting between calls. 1 sends them one at a time.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-retries">Retries per batch (0–3)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-retries" type="number" min="0" max="3"/>
+      </html:div>
+
+      <html:label for="feed-ranker-timeout">Request timeout (ms)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-timeout" type="number" min="15000" max="300000" step="1000"/>
+      </html:div>
+
+      <html:div class="feed-ranker-subhead" data-i18n="pane.preferences.token-and-cost-estimate">Token and cost estimate</html:div>
+      <html:div class="full-width">
+        <html:div class="feed-ranker-hint">Optional. Without prices the cost is reported as unavailable, never as zero.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-input-price">Input price per 1M tokens</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-input-price" type="number" min="0" max="1000000" step="any"/>
+      </html:div>
+
+      <html:label for="feed-ranker-output-price">Output price per 1M tokens</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-output-price" type="number" min="0" max="1000000" step="any"/>
+      </html:div>
+
+      <html:label for="feed-ranker-cost-currency">Currency code</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-cost-currency" type="text" maxlength="3" placeholder="USD"/>
+      </html:div>
+    </html:div>
+    <hbox align="center" pack="end">
+      <label id="feed-ranker-save-status"/>
+      <button id="feed-ranker-save" label="Save settings"/>
+    </hbox>
+  </groupbox>
+
+  <groupbox aria-labelledby="feed-ranker-priority-title">
+    <label><html:h2 id="feed-ranker-priority-title" class="feed-ranker-group-head" data-i18n="pane.preferences.optional-significance-weight">Optional significance weight</html:h2></label>
+    <description data-i18n="pane.preferences.score-is-awesome-gpt">Score is Awesome GPT's relevance score. Priority adds one small capped local adjustment to it.</description>
+    <html:div class="feed-ranker-form">
+      <html:label for="feed-ranker-bibliometric-weight">Maximum significance added to total score (0–10 points)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-bibliometric-weight" type="number" min="0" max="10" step="1"/>
+        <html:div class="feed-ranker-hint">One shared maximum: a journal impact factor, or an arXiv significance value. 0 disables it.</html:div>
+      </html:div>
+
+      <html:div class="feed-ranker-subhead" data-i18n="pane.preferences.arxiv-offline-keyword-fallback">arXiv offline keyword fallback</html:div>
+      <html:div class="full-width">
+        <html:label for="feed-ranker-arxiv-significance-signals">Optional, one author or institution per line</html:label>
+        <html:textarea id="feed-ranker-arxiv-significance-signals" placeholder="One visible author or institution per line; optional 1:, 2:, or 3: tier prefix"></html:textarea>
+        <html:div class="feed-ranker-hint">Local and offline. Used only for scores saved before the significance field became required.</html:div>
+      </html:div>
+    </html:div>
+  </groupbox>
+
+  <groupbox aria-labelledby="feed-ranker-journal-title">
+    <label><html:h2 id="feed-ranker-journal-title" class="feed-ranker-group-head" data-i18n="pane.preferences.easyscholar-journal-lookup">EasyScholar journal lookup</html:h2></label>
+    <description>Metrics come from EasyScholar with your own key, and every resolved journal is written to the item's <html:code>Extra</html:code> field.</description>
+    <html:div class="feed-ranker-form">
+      <html:div class="full-width">
+        <html:label class="feed-ranker-check"><html:input id="feed-ranker-easyscholar-enabled" type="checkbox"/> Enable EasyScholar journal lookup</html:label>
+        <html:div class="feed-ranker-hint">Nothing is sent anywhere until this is on and a key is saved.</html:div>
+      </html:div>
+      <html:div class="full-width">
+        <html:label class="feed-ranker-check"><html:input id="feed-ranker-easyscholar-refresh" type="checkbox"/> Re-read journal metrics before scoring</html:label>
+        <html:div class="feed-ranker-hint">Optional. A cached journal costs no request, and a failure never blocks scoring.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-easyscholar-key">EasyScholar secret key</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-easyscholar-key" type="password" autocomplete="new-password"/>
+        <html:div class="feed-ranker-hint">A resolved journal is reused with no expiry, because its metrics do not change. Use Update journal info to re-read one.</html:div>
+      </html:div>
+    </html:div>
+    <html:div class="feed-ranker-actions">
+      <html:div class="feed-ranker-hint" id="feed-ranker-journal-status"></html:div>
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.key">Key</html:span>
+        <button id="feed-ranker-journal-save-key" label="Save key"/>
+        <button id="feed-ranker-journal-clear-key" label="Clear key"/>
+      </html:div>
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.lookup">Lookup</html:span>
+        <button id="feed-ranker-journal-save" label="Save settings"/>
+        <button id="feed-ranker-journal-update" label="Update journal info"/>
+      </html:div>
+    </html:div>
+  </groupbox>
+
+  <groupbox aria-labelledby="feed-ranker-prompt-title">
+    <label><html:h2 id="feed-ranker-prompt-title" class="feed-ranker-group-head" data-i18n="pane.preferences.scoring-prompt-preview">Scoring prompt preview</html:h2></label>
+    <description data-i18n="pane.preferences.read-only-and-it">Read-only, and it takes the full width on purpose: the payload line is far wider than any column. Opening this pane never sends a request to Awesome GPT.</description>
+    <html:div class="feed-ranker-form">
+      <html:div class="full-width">
+        <html:textarea id="feed-ranker-prompt-preview" readonly="readonly" aria-label="Ready-to-send prompt preview"></html:textarea>
+      </html:div>
+    </html:div>
+  </groupbox>
+
+  <groupbox aria-labelledby="feed-ranker-digest-title">
+    <label><html:h2 id="feed-ranker-digest-group-title" class="feed-ranker-group-head" data-i18n="pane.preferences.email-digest">Email digest</html:h2></label>
+    <description data-i18n="pane.preferences.on-the-repeat-you">On the repeat you choose, FeedRank updates the feeds, scores that period, and emails the digest. Direct SMTP over verified TLS.</description>
+    <html:div class="feed-ranker-form">
+      <html:label for="feed-ranker-run-frequency">Repeat</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:select id="feed-ranker-run-frequency">
+          <html:option value="daily">Daily</html:option>
+          <html:option value="weekly">Weekly</html:option>
+          <html:option value="monthly">Monthly</html:option>
+        </html:select>
+        <html:div class="feed-ranker-hint">The digest covers one day, seven days, or thirty days of scores, matching this repeat.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-weekly-day">Run day</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:select id="feed-ranker-weekly-day">
+          <html:option value="1">Monday</html:option>
+          <html:option value="2">Tuesday</html:option>
+          <html:option value="3">Wednesday</html:option>
+          <html:option value="4">Thursday</html:option>
+          <html:option value="5">Friday</html:option>
+          <html:option value="6">Saturday</html:option>
+          <html:option value="0">Sunday</html:option>
+        </html:select>
+        <html:input id="feed-ranker-monthly-day" type="number" min="1" max="31" step="1" placeholder="1"/>
+        <html:div class="feed-ranker-hint">Weekly uses the weekday; monthly uses the day of the month (31 runs on the last day of a short month).</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-weekly-time">Run time (HH:MM)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-weekly-time" type="text" maxlength="8" placeholder="16:50"/>
+        <html:div class="feed-ranker-hint">Nothing runs when Zotero starts. Blank disables the automatic run; use the FeedRank menu instead.</html:div>
+      </html:div>
+
+      <html:label>Last email</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:div class="feed-ranker-value" id="feed-ranker-email-last" data-i18n="pane.preferences.nothing-has-been-sent">Nothing has been sent yet.</html:div>
+      </html:div>
+
+      <html:div class="feed-ranker-subhead" data-i18n="pane.preferences.digest-contents">Digest contents</html:div>
+
+      <html:label for="feed-ranker-email-max-papers">Maximum papers (1–100)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-max-papers" type="number" min="1" max="100" step="1"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-min-score">Minimum relevance Score (0–100)</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-min-score" type="number" min="0" max="100" step="1"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-priority-count">Priority-paper count</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-priority-count" type="number" min="1" max="50" step="1"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-reading-count">Optional reading-list count</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-reading-count" type="number" min="1" max="100" step="1"/>
+      </html:div>
+
+      <html:div class="full-width">
+        <html:label class="feed-ranker-check"><html:input id="feed-ranker-email-reading-enabled" type="checkbox"/> Include the optional reading list within the maximum-paper cap</html:label>
+      </html:div>
+
+      <html:div class="feed-ranker-subhead" data-i18n="pane.preferences.scheduled-delivery">Scheduled delivery</html:div>
+      <html:div class="full-width">
+        <html:label class="feed-ranker-check"><html:input id="feed-ranker-email-auto-enabled" type="checkbox"/> Send the weekly digest automatically</html:label>
+        <html:div class="feed-ranker-hint">The standing approval for the scheduled send. Off means the weekly run never emails you.</html:div>
+      </html:div>
+    </html:div>
+    <html:div class="feed-ranker-actions">
+      <html:div class="feed-ranker-hint" id="feed-ranker-email-status"></html:div>
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.schedule">Schedule</html:span>
+        <button id="feed-ranker-email-save-options" label="Save digest settings"/>
+        <button id="feed-ranker-weekly-check" label="Check schedule"/>
+      </html:div>
+      <html:div class="feed-ranker-hint">Check schedule reports whether the timer is armed, when the next run is due, and what the last one did.</html:div>
+    </html:div>
+  </groupbox>
+
+  <groupbox aria-labelledby="feed-ranker-connection-title">
+    <label><html:h2 id="feed-ranker-connection-title" class="feed-ranker-group-head" data-i18n="pane.preferences.email-connection">Email connection</html:h2></label>
+    <description data-i18n="pane.preferences.server-first-then-the">Server first, then the credential. The password is never stored in a preference.</description>
+    <html:div class="feed-ranker-form">
+      <html:label for="feed-ranker-email-host">SMTP server host</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-host" type="text" autocomplete="off" placeholder="smtp.example.edu"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-port">SMTP port</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-port" type="number" min="1" max="65535" step="1" placeholder="587"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-tls-mode">TLS mode</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:select id="feed-ranker-email-tls-mode">
+          <html:option value="starttls">STARTTLS (587)</html:option>
+          <html:option value="implicit">Implicit TLS (465/994)</html:option>
+        </html:select>
+      </html:div>
+
+      <html:label for="feed-ranker-email-auth-method">Authentication method</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:select id="feed-ranker-email-auth-method">
+          <html:option value="plain">AUTH PLAIN</html:option>
+          <html:option value="login">AUTH LOGIN</html:option>
+          <html:option value="xoauth2">AUTH XOAUTH2</html:option>
+        </html:select>
+        <html:div class="feed-ranker-hint">The server's advertised list wins: FeedRank uses the strongest mechanism it offers.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-email-username">SMTP username</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-username" type="text" autocomplete="off"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-secret">SMTP password or app password</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-secret" type="password" autocomplete="new-password"/>
+        <html:div class="feed-ranker-hint">Never written to a FeedRank preference. Use a provider-issued app password.</html:div>
+      </html:div>
+
+      <html:label for="feed-ranker-email-from">Sender address</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-from" type="text" autocomplete="off" placeholder="digest@your-domain.example"/>
+      </html:div>
+
+      <html:label for="feed-ranker-email-to">Recipient</html:label>
+      <html:div class="feed-ranker-ctl">
+        <html:input id="feed-ranker-email-to" type="email" autocomplete="off"/>
+      </html:div>
+    </html:div>
+    <!-- Grouped into labelled rows. A single row of buttons plus a status label
+         overflows the Settings pane, which is what hid the buttons furthest right. -->
+    <html:div class="feed-ranker-actions">
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.credentials">Credentials</html:span>
+        <button id="feed-ranker-email-save-credentials" label="Save credentials"/>
+        <button id="feed-ranker-email-clear-credentials" label="Clear credentials"/>
+      </html:div>
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.connection">Connection</html:span>
+        <button id="feed-ranker-email-test-connection" label="Test connection"/>
+        <button id="feed-ranker-email-test-button" label="Send test email…"/>
+      </html:div>
+
+      <html:div class="feed-ranker-subhead" data-i18n="pane.preferences.email-connection-log">Email connection log</html:div>
+      <html:div class="full-width">
+        <html:div class="feed-ranker-hint">Test connection writes this log, on a pass as well as a failure. It reads no secret and sends nothing.</html:div>
+      </html:div>
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.connection-log">Connection log</html:span>
+        <button id="feed-ranker-email-copy-diagnostics" label="Copy log"/>
+        <button id="feed-ranker-email-copy-safe-diagnostics" label="Copy sanitized log"/>
+      </html:div>
+      <html:details class="feed-ranker-fold">
+        <html:summary data-i18n="pane.preferences.connection-log-show">Show the connection log</html:summary>
+        <html:textarea id="feed-ranker-email-log" readonly="readonly" aria-label="Connection log"></html:textarea>
+        <html:div class="feed-ranker-hint" id="feed-ranker-email-log-path"></html:div>
+      </html:details>
+    </html:div>
+  </groupbox>
+
+  <groupbox aria-labelledby="feed-ranker-settings-file-title">
+  <label><html:h2 id="feed-ranker-settings-file-title" data-i18n="pane.settingsFile.heading"
+ class="feed-ranker-group-head"
+>Settings file</html:h2></label>
+  <html:div class="feed-ranker-action-row">
+    <html:span class="feed-ranker-action-label" data-i18n="pane.settingsFile.action">Backup</html:span>
+    <button id="feed-ranker-settings-export" label="Save settings to file…"/>
+    <button id="feed-ranker-settings-import" label="Load settings from file…"/>
+    <button id="feed-ranker-settings-reset" label="Reset all settings"/>
+  </html:div>
+  <html:div class="feed-ranker-hint" id="feed-ranker-settings-file-status"></html:div>
+  <html:div class="feed-ranker-hint" data-i18n="pane.settingsFile.hint">Settings, plus encrypted credentials if you ask. Reset removes the password and key; scores are kept.</html:div>
+</groupbox><groupbox aria-labelledby="feed-ranker-sending-title">
+    <label><html:h2 id="feed-ranker-sending-title" class="feed-ranker-group-head" data-i18n="pane.preferences.preview-and-sending">Preview and sending</html:h2></label>
+    <description data-i18n="pane.preferences.sending-is-the-confirmation">Sending is the confirmation: there is no second dialog. Review opens the exact frozen message that would go out.</description>
+    <html:div class="feed-ranker-form">
+      <html:div class="full-width">
+        <html:details class="feed-ranker-fold">
+          <html:summary class="feed-ranker-fold-head">Show the current digest preview</html:summary>
+          <html:div class="feed-ranker-fold-body">
+            <html:textarea id="feed-ranker-email-preview" readonly="readonly" aria-label="Current digest preview"></html:textarea>
+          </html:div>
+        </html:details>
+      </html:div>
+    </html:div>
+    <html:div class="feed-ranker-actions">
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.digest">Digest</html:span>
+        <button id="feed-ranker-email-rebuild" label="Rebuild digest"/>
+        <button id="feed-ranker-email-preview-button" label="Review digest"/>
+      </html:div>
+      <html:div class="feed-ranker-action-row">
+        <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.retry">Retry</html:span>
+        <button id="feed-ranker-email-retry-button" label="Retry unsent digest"/>
+      </html:div>
+      <html:div class="feed-ranker-hint">Rebuild digest recreates this week's digest from the scores already in Zotero; it sends nothing.</html:div>
+      <html:div class="feed-ranker-hint">Review digest opens that exact message, and sending it there is the confirmation.</html:div>
+      <html:div class="feed-ranker-hint">Retry is only for a message the server provably did not accept; an unknown outcome is offered separately in the preview.</html:div>
+    </html:div>
+  </groupbox>
+</vbox>

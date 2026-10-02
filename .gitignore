@@ -1,0 +1,42 @@
+# Build output. Releases are attached to GitHub Releases, not committed; every version is
+# kept locally in dist/ so an older build can be reinstalled.
+dist/
+*.xpi
+
+# Private development notes: handoff history, full test logs, anything written with one
+# machine in front of you. Never published.
+private/
+
+# A staging copy made for review; the repository holds one source tree, not copies of it.
+Package for release/
+
+# Settings exports, and anything derived from them: they carry the research profile and the mail
+# identities in plain text. See docs/PRIVACY.md.
+feedrank-settings*.json
+state-*.json
+prefs-*.js
+*state-backup*/
+# Local tooling
+node_modules/
+package-lock.json
+*.log
+
+# Zotero profile material, in case a copy of one is ever made inside the project
+*.sqlite
+*.sqlite-journal
+prefs.js
+logins.json
+key4.db
+cert9.db
+storage/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# Archives and database sidecars: a git bundle of an old history must never be published
+*.bundle
+*.zip
+*.sqlite-wal
+*.sqlite-shm

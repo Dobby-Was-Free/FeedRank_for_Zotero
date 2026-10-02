@@ -1,0 +1,319 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<!DOCTYPE window>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        title="FeedRank for Zotero — Settings"
+        orient="vertical">
+  <html:link rel="icon" href="chrome://feedranker/content/favicon.png"/>
+  <html:style>
+    /* The window is resizable and can be dragged wide: the prompt preview is
+       monospace text that only becomes readable with horizontal room. A min-width
+       keeps the form from collapsing, and overflow-x gives a scrollbar instead of
+       squeezing controls when the window is made very narrow. */
+    html, body { min-width: 900px; }
+    body { font: message-box; margin: 16px; color: CanvasText; background: Canvas; overflow-x: auto; }
+
+    /* ---- form controls -------------------------------------------------- */
+    /* One box, one size: every control is the same width and the same height, so
+       none is wider or taller than its neighbours, and a select cannot sit a few
+       pixels off the text inputs beside it. */
+    input[type="text"], input[type="number"], input[type="password"], input[type="email"], select {
+      box-sizing: border-box;
+      font: inherit;
+      width: 180px;
+      max-width: 100%;
+      height: 26px;
+      min-height: 26px;
+      padding: 0 6px;
+      vertical-align: middle;
+    }
+    /* A select must stay clickable and clearly a control, and must never be
+       overlapped by a neighbouring row. */
+    select { position: relative; z-index: 1; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 150px; font: inherit; resize: vertical; }
+
+    /* ---- section headings ----------------------------------------------- */
+    /* Group headings are deliberately much larger than a field label and carry a
+       rule above them, so the gap between setting GROUPS reads as a break rather
+       than as another row spacing. */
+    h1 { font-size: 1.35em; margin: 0 0 4px; }
+    h2 {
+      font-size: 1.12em;
+      margin: 34px 0 2px;
+      padding-top: 18px;
+      border-top: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+    }
+    h2:first-of-type { margin-top: 26px; }
+
+    /* ---- field labels and checkboxes ------------------------------------ */
+    label { display: block; font-weight: 600; margin: 12px 0 4px; }
+    /* A checkbox is NOT sized like an input: `width` made the box stretch across
+       the row and pushed its own text to the far edge, which is what left tick
+       boxes "not on the same line" as their text. */
+    .check {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-weight: 400;
+      margin: 8px 0 0;
+    }
+    .check input { flex: 0 0 auto; width: auto; height: auto; min-height: 0; padding: 0; margin: 2px 0 0; }
+
+    /* ---- the aligned form ------------------------------------------------ */
+    /* One setting per row: a fixed label column, then the control column. Every
+       row shares the same two edges, which is what a grid of independently sized
+       boxes could not give. The label column is short so the control column --
+       and the button rows that share its left edge -- start well left of the
+       middle and fit without wrapping. */
+    .grid {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      column-gap: 12px;
+      row-gap: 10px;
+      align-items: start;
+      margin-top: 8px;
+    }
+    .grid > label { margin: 0; padding-top: 4px; line-height: 1.35; }
+    .grid > .ctl { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+    .grid > .full-width { grid-column: 1 / -1; }
+    /* A read-only value in the control column, on the same edges as a real box.
+       `break-word`, not `anywhere`: see the note in main.js -- `anywhere` lets the
+       column collapse and splits ordinary words down the middle. */
+    .value { line-height: 1.35; padding-top: 4px; overflow-wrap: break-word; word-break: normal; }
+
+    /* ---- layout --------------------------------------------------------- */
+    .hint { color: color-mix(in srgb, CanvasText 65%, transparent); font-size: .92em; line-height: 1.35; margin: 5px 0 0; }
+    .check + .hint { margin-left: 24px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .actions button { flex: 0 0 auto; white-space: nowrap; }
+    #main-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 34px;
+      padding-top: 14px;
+      border-top: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+    }
+
+    /* ---- long read-only text -------------------------------------------- */
+    /* `pre` plus the default leading made the blank lines between instructions
+       read as uneven gaps, and one over-long payload line forced a horizontal
+       scrollbar instead of wrapping. */
+    #prompt-preview {
+      min-height: 260px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .9em;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      overflow: auto;
+      tab-size: 2;
+    }
+    #email-preview { min-height: 135px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .9em; }
+    #arxiv-significance-signals { min-height: 92px; }
+  </html:style>
+  <html:body>
+    <html:main>
+      <html:h1>FeedRank for Zotero</html:h1>
+      <html:div class="hint">Your research feeds, ranked by relevance. Every setting is explained in docs/SETTINGS.md.</html:div>
+
+      <html:h2 data-i18n="pane.settings.scoring">Scoring</html:h2>
+      <html:label for="profile">Research interest profile</html:label>
+      <html:textarea id="profile"></html:textarea>
+      <html:div class="hint">Changing the profile invalidates matching cached scores; Zotero item metadata is never changed.</html:div>
+      <html:div class="grid">
+        <html:label for="language">Explanation language</html:label>
+        <html:div class="ctl"><html:select id="language"><html:option value="zh-CN">Chinese (Simplified)</html:option><html:option value="en">English</html:option></html:select></html:div>
+
+        <html:label for="lookback">Lookback days (0–365)</html:label>
+        <html:div class="ctl"><html:input id="lookback" type="number" min="0" max="365"/></html:div>
+
+        <html:label for="limit">Papers scored per refresh (1–500)</html:label>
+        <html:div class="ctl"><html:input id="limit" type="number" min="1" max="500"/></html:div>
+
+        <html:label for="batch">Papers per Awesome GPT call (1–50)</html:label>
+        <html:div class="ctl"><html:input id="batch" type="number" min="1" max="50"/></html:div>
+
+        <html:label for="concurrency">Requests at once (1–3)</html:label>
+        <html:div class="ctl"><html:input id="concurrency" type="number" min="1" max="3"/></html:div>
+
+        <html:label for="retries">Retries per batch (0–3)</html:label>
+        <html:div class="ctl"><html:input id="retries" type="number" min="0" max="3"/></html:div>
+
+        <html:label for="timeout">Request timeout (ms)</html:label>
+        <html:div class="ctl"><html:input id="timeout" type="number" min="15000" max="300000" step="1000"/></html:div>
+      </html:div>
+
+      <html:h2 data-i18n="pane.settings.token-and-cost-estimate">Token and cost estimate</html:h2>
+      <html:div class="hint">Optional. Without prices the cost is reported as unavailable, never as zero.</html:div>
+      <html:div class="grid">
+        <html:label for="input-price">Input price per 1M tokens</html:label>
+        <html:div class="ctl"><html:input id="input-price" type="number" min="0" max="1000000" step="any"/></html:div>
+
+        <html:label for="output-price">Output price per 1M tokens</html:label>
+        <html:div class="ctl"><html:input id="output-price" type="number" min="0" max="1000000" step="any"/></html:div>
+
+        <html:label for="currency">Currency code</html:label>
+        <html:div class="ctl"><html:input id="currency" type="text" maxlength="3" placeholder="USD"/></html:div>
+      </html:div>
+
+      <html:h2 data-i18n="pane.settings.optional-significance-weight">Optional significance weight</html:h2>
+      <html:div class="hint">Score is Awesome GPT's relevance score. Priority adds one small capped local adjustment to it.</html:div>
+      <html:div class="grid">
+        <html:label for="bibliometric-weight">Maximum significance added to total score (0–10 points)</html:label>
+        <html:div class="ctl">
+          <html:input id="bibliometric-weight" type="number" min="0" max="10" step="1"/>
+          <html:div class="hint">One shared maximum: a journal impact factor, or an arXiv significance value. 0 disables it.</html:div>
+        </html:div>
+      </html:div>
+      <html:label for="arxiv-significance-signals">arXiv offline keyword fallback (optional)</html:label>
+      <html:textarea id="arxiv-significance-signals" placeholder="One visible author or institution per line; optional 1:, 2:, or 3: tier prefix"></html:textarea>
+      <html:div class="hint">Local and offline. Used only for scores saved before the significance field became required.</html:div>
+
+      <html:h2 data-i18n="pane.settings.easyscholar-journal-lookup">EasyScholar journal lookup</html:h2>
+      <html:div class="hint">Metrics come from EasyScholar with your own key, and every resolved journal is written to the item's <html:code>Extra</html:code> field.</html:div>
+      <html:label class="check"><html:input id="easyscholar-enabled" type="checkbox"/> Enable EasyScholar journal lookup</html:label>
+      <html:div class="hint">Nothing is sent anywhere until this is on and a key is saved.</html:div>
+      <html:label class="check"><html:input id="easyscholar-refresh" type="checkbox"/> Re-read journal metrics before scoring</html:label>
+      <html:div class="hint">Optional. A cached journal costs no request, and a failure never blocks scoring.</html:div>
+      <html:div class="grid">
+        <html:label for="easyscholar-key">EasyScholar secret key</html:label>
+        <html:div class="ctl">
+          <html:input id="easyscholar-key" type="password" autocomplete="new-password"/>
+          <html:div class="hint">A resolved journal is reused with no expiry, because its metrics do not change.</html:div>
+        </html:div>
+      </html:div>
+      <html:div id="journal-status" class="hint"></html:div>
+      <html:div class="actions">
+        <html:button id="journal-save">Save journal settings</html:button>
+        <html:button id="journal-save-key">Save key</html:button>
+        <html:button id="journal-clear-key">Clear key</html:button>
+      </html:div>
+
+      <html:h2 data-i18n="pane.settings.scoring-prompt-preview">Scoring prompt preview</html:h2>
+      <html:div class="hint">Read-only. Reviewing this preview never sends a request to Awesome GPT.</html:div>
+      <html:textarea id="prompt-preview" readonly="readonly"></html:textarea>
+
+      <html:h2 data-i18n="pane.settings.email-digest">Email digest</html:h2>
+      <html:div class="hint">On the repeat you choose, FeedRank updates the feeds, scores that period, and emails the digest. Direct SMTP over verified TLS.</html:div>
+      <html:div class="grid">
+        <html:label for="run-frequency">Repeat</html:label>
+        <html:div class="ctl">
+          <html:select id="run-frequency"><html:option value="daily">Daily</html:option><html:option value="weekly">Weekly</html:option><html:option value="monthly">Monthly</html:option></html:select>
+          <html:div class="hint">The digest covers one day, seven days, or thirty days of scores, matching this repeat.</html:div>
+        </html:div>
+
+        <html:label for="weekly-day">Run day</html:label>
+        <html:div class="ctl">
+          <html:select id="weekly-day"><html:option value="1">Monday</html:option><html:option value="2">Tuesday</html:option><html:option value="3">Wednesday</html:option><html:option value="4">Thursday</html:option><html:option value="5">Friday</html:option><html:option value="6">Saturday</html:option><html:option value="0">Sunday</html:option></html:select>
+          <html:input id="monthly-day" type="number" min="1" max="31" step="1" placeholder="1"/>
+          <html:div class="hint">Weekly uses the weekday; monthly uses the day of the month (31 runs on the last day of a short month).</html:div>
+        </html:div>
+
+        <html:label for="weekly-time">Run time (HH:MM)</html:label>
+        <html:div class="ctl">
+          <html:input id="weekly-time" type="text" maxlength="8" placeholder="16:50"/>
+          <html:div class="hint">Nothing runs when Zotero starts. Blank disables the automatic run; use the FeedRank menu instead.</html:div>
+        </html:div>
+
+        <html:label>Last email</html:label>
+        <html:div class="ctl"><html:div class="value" id="email-last" data-i18n="pane.settings.nothing-has-been-sent">Nothing has been sent yet.</html:div></html:div>
+
+        <html:label for="email-max-papers">Maximum papers (1–100)</html:label>
+        <html:div class="ctl"><html:input id="email-max-papers" type="number" min="1" max="100"/></html:div>
+
+        <html:label for="email-min-score">Minimum relevance Score (0–100)</html:label>
+        <html:div class="ctl"><html:input id="email-min-score" type="number" min="0" max="100"/></html:div>
+
+        <html:label for="email-priority-count">Priority-paper count</html:label>
+        <html:div class="ctl"><html:input id="email-priority-count" type="number" min="1" max="50"/></html:div>
+
+        <html:label for="email-reading-count">Optional reading-list count</html:label>
+        <html:div class="ctl"><html:input id="email-reading-count" type="number" min="1" max="100"/></html:div>
+      </html:div>
+      <html:label class="check"><html:input id="email-reading-enabled" type="checkbox"/> Include reading-list papers within the maximum-paper cap</html:label>
+      <html:label class="check"><html:input id="email-auto-enabled" type="checkbox"/> Send the weekly digest automatically</html:label>
+      <html:div class="hint">The standing approval for the scheduled send. Off means the weekly run never emails you.</html:div>
+      <html:div class="actions">
+        <html:button id="email-save-options">Save digest settings</html:button>
+        <html:button id="weekly-check">Check schedule</html:button>
+      </html:div>
+      <html:div class="hint">Check schedule reports whether the timer is armed, when the next run is due, and what the last one did.</html:div>
+
+      <html:h2 data-i18n="pane.settings.email-connection">Email connection</html:h2>
+      <html:div class="hint">Server first, then the credential. The password is never stored in a preference.</html:div>
+      <html:div class="grid">
+        <html:label for="email-host">SMTP server host</html:label>
+        <html:div class="ctl"><html:input id="email-host" type="text" autocomplete="off" placeholder="smtp.example.edu"/></html:div>
+
+        <html:label for="email-port">SMTP port</html:label>
+        <html:div class="ctl"><html:input id="email-port" type="number" min="1" max="65535" step="1" placeholder="587"/></html:div>
+
+        <html:label for="email-tls-mode">TLS mode</html:label>
+        <html:div class="ctl"><html:select id="email-tls-mode"><html:option value="starttls">STARTTLS (587)</html:option><html:option value="implicit">Implicit TLS (465/994)</html:option></html:select></html:div>
+
+        <html:label for="email-auth-method">Authentication method</html:label>
+        <html:div class="ctl">
+          <html:select id="email-auth-method"><html:option value="plain">AUTH PLAIN</html:option><html:option value="login">AUTH LOGIN</html:option><html:option value="xoauth2">AUTH XOAUTH2</html:option></html:select>
+          <html:div class="hint">The server's advertised list wins: FeedRank uses the strongest mechanism it offers.</html:div>
+        </html:div>
+
+        <html:label for="email-username">SMTP username</html:label>
+        <html:div class="ctl"><html:input id="email-username" type="text" autocomplete="off"/></html:div>
+
+        <html:label for="email-secret">SMTP password or app password</html:label>
+        <html:div class="ctl">
+          <html:input id="email-secret" type="password" autocomplete="new-password"/>
+          <html:div class="hint">Never stored in a FeedRank preference. Use a provider-issued app password.</html:div>
+        </html:div>
+
+        <html:label for="email-from">Sender address</html:label>
+        <html:div class="ctl"><html:input id="email-from" type="text" autocomplete="off" placeholder="digest@your-domain.example"/></html:div>
+
+        <html:label for="email-to">Recipient</html:label>
+        <html:div class="ctl"><html:input id="email-to" type="email" autocomplete="off"/></html:div>
+      </html:div>
+      <html:div class="actions">
+        <html:button id="email-save-credentials">Save credentials</html:button>
+        <html:button id="email-clear-credentials">Clear credentials</html:button>
+        <html:button id="email-test-connection">Test connection</html:button>
+        <html:button id="email-test">Send test email…</html:button>
+      </html:div>
+
+      <html:h2 data-i18n="pane.settings.email-connection-log">Email connection log</html:h2>
+      <html:div class="hint">Test connection writes this log file, on a pass as well as a failure. It reads no secret and sends nothing.</html:div>
+      <html:div class="actions">
+        <html:button id="email-copy-diagnostics">Copy log</html:button>
+        <html:button id="email-copy-safe-diagnostics">Copy sanitized log</html:button>
+      </html:div>
+      <html:details class="feed-ranker-fold">
+        <html:summary data-i18n="pane.settings.connection-log-show">Show the connection log</html:summary>
+        <html:textarea id="email-log" readonly="readonly" aria-label="Connection log"></html:textarea>
+        <html:div class="hint" id="email-log-path"></html:div>
+      </html:details>
+
+      <html:h2 data-i18n="pane.settings.preview-rebuild-and-sending">Preview, rebuild, and sending</html:h2>
+      <html:div class="hint">The digest is built from this week's scored articles. Rebuilding sends nothing; Review opens the exact message to send.</html:div>
+      <html:textarea id="email-preview" readonly="readonly"></html:textarea>
+      <html:div id="email-status" class="hint"></html:div>
+      <html:div class="actions">
+        <html:button id="email-rebuild">Rebuild digest</html:button>
+        <html:button id="email-review">Review digest</html:button>
+        <html:button id="email-retry">Retry unsent digest</html:button>
+      </html:div>
+
+      <html:h2 data-i18n="pane.settingsFile.heading">Settings file</html:h2>
+      <html:div class="hint" data-i18n="pane.settingsFile.hint">Settings, plus encrypted credentials if you ask. Reset removes the password and key; scores are kept.</html:div>
+      <html:div class="actions">
+        <html:button id="settings-export">Save settings to file…</html:button>
+        <html:button id="settings-import">Load settings from file…</html:button>
+        <html:button id="settings-reset">Reset all settings</html:button>
+      </html:div>
+      <html:div class="hint" id="settings-file-status"></html:div>
+      <html:div id="main-actions"><html:button id="cancel">Cancel</html:button><html:button id="save">Save and close</html:button></html:div>
+    </html:main>
+  </html:body>
+  <script src="chrome://feedranker/content/settings.js"/>
+</window>

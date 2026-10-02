@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<!DOCTYPE window>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        title="FeedRank for Zotero — Scored articles"
+        orient="vertical">
+  <html:link rel="icon" href="chrome://feedranker/content/favicon.png"/>
+  <html:style>
+    body { font: message-box; margin: 14px; color: CanvasText; background: Canvas; }
+    #summary { margin-bottom: 10px; white-space: pre-wrap; }
+    #table-wrap { max-height: calc(100vh - 115px); overflow: auto; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border-bottom: 1px solid color-mix(in srgb, CanvasText 16%, transparent); padding: 8px; text-align: left; vertical-align: top; overflow-wrap: break-word; word-break: normal; }
+    th { position: sticky; top: 0; background: Canvas; z-index: 1; }
+    .sort-button { appearance: none; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; cursor: pointer; padding: 0; text-align: left; width: 100%; }
+    .sort-button:hover, .sort-button:focus-visible { text-decoration: underline; }
+    th.score, td.score, th.priority, td.priority { width: 6%; text-align: right; font-variant-numeric: tabular-nums; }
+    th.title { width: 21%; }
+    th.source { width: 10%; }
+    th.date { width: 8%; }
+    th.confidence { width: 8%; }
+    th.reason { width: 20%; }
+    th.evidence { width: 15%; }
+    th.actions { width: 12%; }
+    .action-button { margin: 1px 3px 1px 0; }
+    #footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  </html:style>
+  <html:body>
+    <html:main>
+      <html:div id="summary"></html:div>
+      <html:div id="table-wrap">
+        <html:table>
+          <html:thead><html:tr>
+            <html:th id="sort-header-score" class="score" aria-sort="descending"><html:button id="sort-score" class="sort-button" type="button">Score ↓</html:button></html:th>
+            <html:th id="sort-header-priority" class="priority" aria-sort="none"><html:button id="sort-priority" class="sort-button" type="button">Priority</html:button></html:th>
+            <html:th id="sort-header-title" class="title" aria-sort="none"><html:button id="sort-title" class="sort-button" type="button">Title</html:button></html:th>
+            <html:th id="sort-header-source" class="source" aria-sort="none"><html:button id="sort-source" class="sort-button" type="button">Feed</html:button></html:th>
+            <html:th id="sort-header-date" class="date" aria-sort="none"><html:button id="sort-date" class="sort-button" type="button">Date</html:button></html:th>
+            <html:th id="sort-header-confidence" class="confidence" aria-sort="none"><html:button id="sort-confidence" class="sort-button" type="button">Confidence</html:button></html:th>
+            <html:th id="sort-header-reason" class="reason" aria-sort="none"><html:button id="sort-reason" class="sort-button" type="button">Relevance explanation</html:button></html:th>
+            <html:th id="sort-header-evidence" class="evidence" aria-sort="none"><html:button id="sort-evidence" class="sort-button" type="button">Local evidence</html:button></html:th>
+            <html:th class="actions">Actions</html:th>
+          </html:tr></html:thead>
+          <html:tbody id="rows"></html:tbody>
+        </html:table>
+      </html:div>
+      <html:div id="footer"><html:button id="preview-email">Preview email</html:button><html:button id="send-digest">Send digest…</html:button><html:button id="rerank">Rescore latest</html:button><html:button id="close">Close</html:button></html:div>
+    </html:main>
+  </html:body>
+  <script src="chrome://feedranker/content/rankedFeeds.js"/>
+</window>

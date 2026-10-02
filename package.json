@@ -1,0 +1,10 @@
+{
+  "name": "feedrank-for-zotero",
+  "private": true,
+  "version": "0.3.0",
+  "description": "FeedRank for Zotero — Your research feeds, ranked by relevance.",
+  "scripts": {
+    "test": "node tests/core.test.js && node tests/email.test.js && node tests/email-service.test.js && node tests/settings-file.test.js && node tests/strings.test.js && node tests/notify.test.js && node tests/main.test.js",
+    "build": "node tools/build.mjs"
+  }
+}

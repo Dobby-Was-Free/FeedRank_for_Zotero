@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<!DOCTYPE window>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        title="FeedRank for Zotero"
+        orient="vertical">
+  <html:link rel="icon" href="chrome://feedranker/content/favicon.png"/>
+  <html:style>
+    body { font: message-box; margin: 18px; min-width: 390px; }
+    #message { min-height: 2.5em; white-space: normal; }
+    #usage { min-height: 2.8em; margin-bottom: 8px; color: color-mix(in srgb, CanvasText 74%, transparent); font-size: .92em; white-space: normal; }
+    progress { width: 100%; margin: 12px 0; }
+    .actions { display: flex; justify-content: flex-end; }
+  </html:style>
+  <html:body>
+    <html:main>
+      <html:div id="message">Preparing scoring…</html:div>
+      <html:progress id="progress" max="1" value="0"></html:progress>
+      <html:div id="usage" aria-live="polite"></html:div>
+      <html:div class="actions"><html:button id="cancel">Cancel</html:button></html:div>
+    </html:main>
+  </html:body>
+  <script src="chrome://feedranker/content/progress.js"/>
+</window>
