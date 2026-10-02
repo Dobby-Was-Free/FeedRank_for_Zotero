@@ -43,7 +43,7 @@ You need **Zotero 10**, a working **[Awesome GPT](https://github.com/MuiseDestin
 2. In Zotero, open **Tools → Plugins**, select the gear menu, and choose **Install Plugin From File…**
 3. Select the `.xpi` and restart Zotero.
 
-The published release notes report testing on **Windows with Zotero 10**. macOS and Linux have not yet been verified. Model integration can also depend on the installed Awesome GPT version.
+The published release notes report testing on **Windows with Zotero 10**. macOS also passed basic function tests, and Linux has not yet been verified. Model integration can also depend on the installed Awesome GPT version.
 
 For download verification, compare the file's SHA-256 with the digest shown for that exact release asset. Checksums belong to individual builds, not just version names.
 
