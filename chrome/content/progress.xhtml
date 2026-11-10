@@ -11,14 +11,18 @@
     #message { min-height: 2.5em; white-space: normal; }
     #usage { min-height: 2.8em; margin-bottom: 8px; color: color-mix(in srgb, CanvasText 74%, transparent); font-size: .92em; white-space: normal; }
     progress { width: 100%; margin: 12px 0; }
-    .actions { display: flex; justify-content: flex-end; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; }
+    [hidden] { display: none !important; }
   </html:style>
   <html:body>
     <html:main>
       <html:div id="message">Preparing scoring…</html:div>
       <html:progress id="progress" max="1" value="0"></html:progress>
       <html:div id="usage" aria-live="polite"></html:div>
-      <html:div class="actions"><html:button id="cancel">Cancel</html:button></html:div>
+      <html:div class="actions">
+        <html:button id="skip-current" disabled="disabled" hidden="hidden">Skip current feed</html:button>
+        <html:button id="cancel">Cancel</html:button>
+      </html:div>
     </html:main>
   </html:body>
   <script src="chrome://feedranker/content/progress.js"/>

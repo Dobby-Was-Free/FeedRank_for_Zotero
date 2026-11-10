@@ -4972,7 +4972,8 @@ test("a weekly digest that is prepared but not emailed says so, and says how to 
   // Reported as "the refresh is automatic, but takes some time. then I never see
   // the email." The run completed and the digest was frozen; only the send failed,
   // and the sole trace was a line in Zotero's error console.
-  const runtime = makeRuntime({ request: async () => validResponse([candidate()]) });
+  const paper = candidate({ date: Core.localDay() });
+  const runtime = makeRuntime({ request: async () => validResponse([paper]) });
   runtime.service.createProgress = () => ({
     cancelled: false, attachXHR() {}, update() {}, reportUsage() {}, close() {},
   });
@@ -4989,7 +4990,7 @@ test("a weekly digest that is prepared but not emailed says so, and says how to 
   const workflow = { cancelled: false, progress: null, cancel() { this.cancelled = true; } };
   runtime.service.activeRun = workflow;
 
-  await runtime.service.rankAndDisplay(runtime.mainWindow, [candidate()], {
+  await runtime.service.rankAndDisplay(runtime.mainWindow, [paper], {
     refresh: {},
     workflow,
     digestRun: { runID: "weekly-run", autoSendApproved: true },
@@ -5259,7 +5260,7 @@ test("Send weekly digest performs the whole scheduled job on demand", async () =
 
   // The automatic path still refuses a week that is already done.
   const before = refreshes;
-  await runtime.service.runWeeklyIfDue(new Date(2026, 8, 30, 17, 30));
+  await runtime.service.runWeeklyIfDue(new Date());
   assert.equal(refreshes, before, "the scheduled path must stay idempotent");
 });
 
@@ -5378,8 +5379,8 @@ test("both panes keep Check schedule and the test scaffolding is gone", async ()
   // The job itself is still reachable on demand, from the Tools menu.
   const main = fs.readFileSync(path.join(root, "chrome/content/main.js"), "utf8");
   assert.match(main, /MENU_WEEKLY_NOW_ID/, "the menu command must remain");
-  assert.match(main, /runWeekly\(new Date\(\), \{ manual: true \}\)/,
-    "the menu command must run the whole job");
+  assert.match(main, /MENU_WEEKLY_NOW_ID, this\.t\("menu\.sendDigest"\), \(\) => this\.runRefreshAndEmail\(window\)/,
+    "the restored menu command must run the whole preview-first job");
 });
 
 test("the journal configuration defaults to writing Extra, with only the re-read optional", async () => {
@@ -5583,6 +5584,41 @@ test("a zero-new-ID refresh selects dated recent stored feed papers as bounded f
   assert.equal(result.refresh.fallbackCandidateCount, 1);
   assert.equal(result.candidates.length, 1);
   assert.equal(result.candidates[0].id, stored.id);
+});
+
+test("digest refresh merges the period backlog even when it imports new items, respecting cache and cap", async () => {
+  const date = Core.localDay();
+  const stored = Array.from({ length: 4 }, (_, index) => candidate({
+    id: "1:BACKLOG" + index, itemID: 100 + index, libraryID: 1,
+    title: "Backlog article " + index, date, doi: "10.1234/backlog" + index,
+  }));
+  const newlyImported = Array.from({ length: 2 }, (_, index) => candidate({
+    id: "1:NEW" + index, itemID: 200 + index, libraryID: 1,
+    title: "New article " + index, date, doi: "10.1234/new" + index,
+  }));
+  for (const fullPeriod of [false, true]) {
+    let imported = false;
+    const feed = { libraryID: 1, name: "Example feed", async updateFeed() { imported = true; } };
+    const runtime = makeRuntime({ feeds: [feed],
+      itemsGetAll: async () => [...stored, ...(imported ? newlyImported : [])].map((value) => candidateItem(value)),
+    });
+    const { service } = runtime;
+    service.loadState = () => ({ ranks: { [stored[0].id]: { ...stored[0], score: 90 } } });
+    service.matchesCurrentScore = (record, article) => record.id === article.id;
+    const result = await service.refreshAndCollect(runtime.mainWindow,
+      { ...service.loadConfig(), lookbackDays: 7, candidateLimit: 4, includePeriodBacklog: fullPeriod });
+    assert.equal(result.refresh.newItemCount, 2);
+    assert.equal(result.candidates.length, fullPeriod ? 4 : 2);
+    assert.equal(result.refresh.limitedCount, fullPeriod ? 1 : 0);
+    assert.equal(result.refresh.fallbackUsed, fullPeriod);
+    if (fullPeriod) {
+      assert.equal(result.refresh.fallbackRecentItemCount, 6);
+      assert.equal(result.refresh.fallbackCurrentScoreCount, 1);
+      assert.equal(result.refresh.fallbackCandidateCount, 5);
+      assert.equal(result.refresh.candidateSource, "period-unscored");
+      assert.ok(!result.candidates.some((record) => record.id === stored[0].id), "current score is reused in the digest, not re-ranked");
+    }
+  }
 });
 
 test("a skipped recovered refresh reports the available candidate count", () => {
@@ -5817,7 +5853,7 @@ test("one feed failure does not abort a successful feed refresh", async () => {
     guid: "guid-50",
     getDisplayTitle: () => "New photonic item",
     getCreators: () => [],
-    getField: (field) => ({ date: "2026-09-29", abstractNote: "", DOI: "", url: "" }[field] || ""),
+    getField: (field) => ({ date: Core.localDay(), abstractNote: "", DOI: "", url: "" }[field] || ""),
   };
   const goodFeed = { libraryID: 1, name: "Good", async updateFeed() { updated = true; } };
   const badFeed = { libraryID: 2, name: "Bad", async updateFeed() { throw new Error("network failure"); } };
@@ -5843,7 +5879,7 @@ test("a partial feed failure still collects items Zotero saved before the error"
     guid: "guid-51",
     getDisplayTitle: () => "Saved before malformed feed entry",
     getCreators: () => [],
-    getField: (field) => ({ date: "2026-09-29", abstractNote: "", DOI: "", url: "" }[field] || ""),
+    getField: (field) => ({ date: Core.localDay(), abstractNote: "", DOI: "", url: "" }[field] || ""),
   };
   const partialFeed = {
     libraryID: 1,
@@ -6285,7 +6321,8 @@ test("results window bounds a large live call history without shrinking its aggr
 });
 
 test("only a separately marked weekly completion records an email digest after cache commit", async () => {
-  const runtime = makeRuntime({ request: async () => validResponse([candidate()]) });
+  const paper = candidate({ date: Core.localDay() });
+  const runtime = makeRuntime({ request: async () => validResponse([paper]) });
   runtime.service.createProgress = () => ({
     cancelled: false, attachXHR() {}, update() {}, reportUsage() {}, close() {},
   });
@@ -6299,7 +6336,7 @@ test("only a separately marked weekly completion records an email digest after c
   };
   const workflow = { cancelled: false, progress: null, cancel() { this.cancelled = true; } };
   runtime.service.activeRun = workflow;
-  await runtime.service.rankAndDisplay(runtime.mainWindow, [candidate()], {
+  await runtime.service.rankAndDisplay(runtime.mainWindow, [paper], {
     refresh: {},
     workflow,
     // The digest CONTENT and its window come from the week's selection, so only the run
@@ -6846,7 +6883,7 @@ test("every user-visible command name agrees across the menu, the dialogs, and t
     "Refresh and score",
     "Score last N days…",
     "Rescore last N days…",
-    "Send weekly digest",
+    "Refresh & email…",
     "Show scored articles",
     "Settings…",
   ];

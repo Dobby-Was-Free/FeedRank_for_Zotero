@@ -34,9 +34,12 @@
 
   const MAX_DIGEST_PAPERS = 100;
   const MAX_SAVED_SUBMISSIONS = 3;
-  const MAX_DIGEST_CONTENT_LENGTH = 60000;
-  const MAX_MESSAGE_STATE_LENGTH = 200000;
-  const MAX_EMAIL_STATE_LENGTH = 400000;
+  // A normal 100-paper HTML + plain-text digest exceeds the old 60K limit.
+  // Keep finite budgets, aligned with the MIME ceiling. Main persists this
+  // non-secret state in small, atomic shards rather than one large preference.
+  const MAX_DIGEST_CONTENT_LENGTH = 512 * 1024;
+  const MAX_MESSAGE_STATE_LENGTH = 2 * 1024 * 1024;
+  const MAX_EMAIL_STATE_LENGTH = 12 * 1024 * 1024;
   const MAX_TRANSPORT_TIMEOUT_MS = 120000;
   const DEFAULT_TRANSPORT_TIMEOUT_MS = 30000;
 
@@ -410,10 +413,11 @@
       this.clock = typeof clock === "function" ? clock : () => Date.now();
       this.State = State || {
         load: () => this.Zotero.FeedRanker?.loadState?.(),
+        loadAsync: () => this.Zotero.FeedRanker?.loadStateAsync?.() ?? this.Zotero.FeedRanker?.loadState?.(),
         // Email delivery is disabled until main supplies its canonical,
         // serialized mutation function. An independent stale read/modify/write
         // would be unsafe beside a scoring-cache commit.
-        mutate: (mutator) => this.Zotero.FeedRanker?.mutateState?.(mutator),
+        mutate: (mutator) => this.Zotero.FeedRanker?.mutateState?.(mutator, { returnState: false }),
       };
       this.sessionCredentials = new Map();
       this.sendInProgress = false;
@@ -878,6 +882,15 @@
     readRootState() {
       const state = this.State?.load?.();
       if (!state || typeof state !== "object") throw new Error("FeedRank delivery state is unavailable");
+      if (state.stateIntegrityError) throw new Error(state.stateIntegrityError);
+      return state;
+    }
+
+    async readRootStateAsync() {
+      const state = typeof this.State?.loadAsync === "function"
+        ? await this.State.loadAsync() : this.State?.load?.();
+      if (!state || typeof state !== "object") throw new Error("FeedRank delivery state is unavailable");
+      if (state.stateIntegrityError) throw new Error(state.stateIntegrityError);
       return state;
     }
 
@@ -973,12 +986,12 @@
       return Object.fromEntries(kept.map((entry) => [entry.submissionKey, entry]));
     }
 
-    currentSnapshot() {
-      return normalizedSnapshot(this.Email, asObject(this.readRootState().emailDelivery).currentRun);
+    currentSnapshot(rootState = this.readRootState()) {
+      return normalizedSnapshot(this.Email, asObject(rootState.emailDelivery).currentRun);
     }
 
-    currentSubmissions() {
-      const raw = asObject(this.readRootState().emailSubmissions);
+    currentSubmissions(rootState = this.readRootState()) {
+      const raw = asObject(rootState.emailSubmissions);
       return Object.fromEntries(Object.entries(raw)
         .map(([key, value]) => [key, normalizedSubmission(this.Email, key, value)])
         .filter(([, value]) => Boolean(value)));
@@ -1010,6 +1023,7 @@
       if (!DIGEST_SOURCES.has(String(source || ""))) {
         throw new Error("Only completed weekly or explicitly manual runs are digest-eligible");
       }
+      const runToken = opaqueRunID(runID);
       const config = this.loadConfig();
       const digest = this.Email.buildDigest({
         date: validDate(localDay) ? localDay : localDayNow(),
@@ -1025,7 +1039,9 @@
       const snapshot = {
         schema: 2,
         source,
-        runID: opaqueRunID(runID),
+        // A new score/body under the same manual label is a new draft, whereas
+        // an unchanged body still reuses its existing frozen submission.
+        runID: source === "manual" ? opaqueRunID("manual:" + digestHash(digest) + ":" + runToken) : runToken,
         localDay: digest.date,
         priorityCount: digest.priority.length,
         readingListCount: digest.readingList.length,
@@ -1044,20 +1060,50 @@
     }
 
     async storeSnapshot(snapshot) {
+      const current = this.currentSnapshot();
+      if (current && current.source === snapshot.source && current.runID === snapshot.runID &&
+          current.priorityCount === snapshot.priorityCount && current.readingListCount === snapshot.readingListCount &&
+          current.digest.subject === snapshot.digest.subject && current.digest.text === snapshot.digest.text &&
+          current.digest.html === snapshot.digest.html) {
+        return { recorded: true, snapshot: this.publicSnapshot(current) };
+      }
       await this.mutateEmailState((emailState) => {
         emailState.delivery = { schema: 2, currentRun: snapshot, updatedAt: this.clock() };
       });
       return { recorded: true, snapshot: this.publicSnapshot(snapshot) };
     }
 
+    async buildAndStoreSnapshot(input) {
+      try {
+        const snapshot = this.buildSnapshot(input);
+        return await this.storeSnapshot(snapshot);
+      } catch (error) {
+        // Never present an older five-paper message as this run's digest.
+        // Frozen submissions remain untouched, including uncertain outcomes.
+        await this.invalidateSnapshot(safeError(error));
+        throw error;
+      }
+    }
+
+    async invalidateSnapshot(reason) {
+      const safeReason = boundedText(reason, 500);
+      const current = asObject(this.readRootState().emailDelivery);
+      if (!current.currentRun && current.lastBuildError === safeReason) return;
+      await this.mutateEmailState((emailState) => {
+        emailState.delivery = {
+          schema: 2, currentRun: null, updatedAt: this.clock(),
+          lastBuildError: safeReason,
+        };
+      });
+    }
+
     async recordCompletedWeeklyRun({
       source, runID, localDay, records, window: digestWindow, autoSendApproved = false, parentWindow,
     } = {}) {
       if (source !== "weekly") return { recorded: false, reason: "Only completed weekly runs are auto-digest eligible" };
-      const snapshot = this.buildSnapshot({ source: "weekly", runID, localDay, records, window: digestWindow });
       // By default this hook only writes an exact local preview snapshot. It
       // does not load a credential, open a dialog, or connect anywhere.
-      const stored = await this.storeSnapshot(snapshot);
+      const stored = await this.buildAndStoreSnapshot({ source: "weekly", runID, localDay, records, window: digestWindow });
       // Auto delivery is an exceptionally narrow exception to the default
       // preview-first path. It is permitted only when main passes a literal
       // same-run authorization obtained from a separate pre-ranking dialog;
@@ -1086,17 +1132,6 @@
     }
 
     /*
-     * Rebuild a digest and send it in one step, with no preview window.
-     *
-     * The single exception to the preview-first rule, and deliberately a narrow
-     * one: it exists for one visible button whose label says exactly what it
-     * does. That click is the confirmation, so `automaticSendingEnabled` is not
-     * consulted -- this is not an automatic send, it is a manual one. Everything
-     * that guards the message itself is unchanged: the digest is rebuilt from
-     * exactly the records the caller passed, bounded and validated like any
-     * other, frozen into wire bytes and persisted before the socket opens, and
-     * an existing delivery state for the same run still blocks a second copy.
-    /*
      * Rebuild the local digest from caller-supplied scored records.
      *
      * This is the whole "rebuild" function: it creates the message, bounds and
@@ -1114,15 +1149,14 @@
         throw new Error("There are no scored articles to build a digest from");
       }
       const date = validDate(localDay) ? localDay : localDayNow();
-      const snapshot = this.buildSnapshot({
+      const stored = await this.buildAndStoreSnapshot({
         source: "manual",
         runID: boundedText(runID, 1000) || "preview:" + date,
         localDay: date,
         records,
         window: digestWindow,
       });
-      await this.storeSnapshot(snapshot);
-      return { built: true, snapshot: this.publicSnapshot(snapshot) };
+      return { built: true, snapshot: stored.snapshot };
     }
 
     // Kept as the older name of rebuildDigest, for a pane from a previous version
@@ -1145,13 +1179,12 @@
       // delivery source.
       const stableRunMaterial = boundedText(summary?.runID || summary?.refresh?.startedAt, 1000) ||
         "manual:" + date + ":" + fnv1a(JSON.stringify(records));
-      const snapshot = this.buildSnapshot({
+      return this.buildAndStoreSnapshot({
         source: "manual",
         runID: stableRunMaterial,
         localDay: date,
         records,
       });
-      return this.storeSnapshot(snapshot);
     }
 
     publicSnapshot(snapshot) {
@@ -1171,7 +1204,7 @@
     }
 
     async previewCurrentDigest() {
-      const snapshot = this.currentSnapshot();
+      const snapshot = this.currentSnapshot(await this.readRootStateAsync());
       const credentials = await this.credentialSummary();
       if (!snapshot) return { available: false, credentials };
       return {
@@ -1181,17 +1214,20 @@
     }
 
     async getStatus() {
-      const snapshot = this.currentSnapshot();
-      const submissions = this.currentSubmissions();
+      // One consistent read per pane poll, with cooperative shard loading in
+      // Zotero. Previously each poll loaded every score/email shard three times.
+      const rootState = await this.readRootStateAsync();
+      const snapshot = this.currentSnapshot(rootState);
+      const submissions = this.currentSubmissions(rootState);
       const values = Object.values(submissions);
-      const currentRunHash = snapshot ? fnv1a(snapshot.runID) : "";
       const current = values
-        .filter((entry) => entry.runHash === currentRunHash)
+        .filter((entry) => snapshot && this.submissionMatchesSnapshot(entry, snapshot))
         .sort((left, right) => right.createdAt - left.createdAt)[0] || null;
       return {
         config: this.loadConfig(),
         credentials: await this.credentialSummary(),
         snapshot: this.publicSnapshot(snapshot),
+        digestBuildError: boundedText(rootState.emailDelivery?.lastBuildError, 500),
         currentSubmission: current ? this.publicSubmission(current) : null,
         retryKey: current?.status === "retryable" ? current.submissionKey : "",
         // The most recent delivery this install knows about, whatever run it came
@@ -1285,10 +1321,18 @@
       };
     }
 
+    submissionMatchesSnapshot(entry, snapshot) {
+      if (entry.kind !== "digest") return false;
+      return entry.runHash === fnv1a(snapshot.runID) ||
+        (entry.subject === snapshot.digest.subject && entry.text === snapshot.digest.text &&
+          entry.html === snapshot.digest.html);
+    }
+
     findBlockingSubmission(snapshot) {
-      const runHash = fnv1a(snapshot.runID);
       const current = Object.values(this.currentSubmissions())
-        .filter((entry) => entry.runHash === runHash)
+        // A manual refresh of an already accepted/uncertain scheduled digest
+        // must not create another send just because its caller used a new run ID.
+        .filter((entry) => this.submissionMatchesSnapshot(entry, snapshot))
         .sort((left, right) => right.createdAt - left.createdAt);
       return current.find((entry) => BLOCKING_STATUSES.has(entry.status)) || null;
     }
@@ -1691,7 +1735,10 @@
 
     async openPreview({ parentWindow } = {}) {
       let preview = await this.previewCurrentDigest();
-      if (!preview.available) throw new Error("No completed FeedRank digest is available yet");
+      if (!preview.available) throw new Error(
+        boundedText(this.readRootState().emailDelivery?.lastBuildError, 500) ||
+        "No completed FeedRank digest is available yet",
+      );
       let prepared = null;
       let preparationError = "";
       try {
@@ -1835,6 +1882,7 @@
     LOGIN_REALM,
     LOGIN_KIND,
     MAX_DIGEST_PAPERS,
+    MAX_DIGEST_CONTENT_LENGTH,
     MAX_SAVED_SUBMISSIONS,
     MAX_MESSAGE_STATE_LENGTH,
     MAX_EMAIL_STATE_LENGTH,

@@ -124,6 +124,12 @@
    */
   const FEED_SETTLE_DELAY_MS = 2000;
   const FEED_SETTLE_ROUNDS = 3;
+  // These are RSS/data watchdogs, independent of the model request timeout.
+  // Native Zotero feed updates have no public abort API. A deadline releases
+  // FeedRank's wait, not the underlying fetch/parser/database operation.
+  const FEED_WAIT_LIMITS = Object.freeze({
+    updateMs: 90000, dataMs: 15000, totalMs: 300000, pollMs: 250,
+  });
   /*
    * "HH:MM" in local time, or "" when no time is scheduled.
    *
@@ -363,6 +369,15 @@
     }
   }
 
+  class FeedRefreshError extends Error {
+    constructor(code, message, stage = "") {
+      super(message);
+      this.name = "FeedRefreshError";
+      this.code = code;
+      this.stage = stage;
+    }
+  }
+
   function asObject(value) {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   }
@@ -542,6 +557,8 @@
       // Handle for the scheduled-run poll. Cleared on shutdown so a timer cannot
       // outlive the add-on and fire into a torn-down service.
       this.weeklyTimer = null;
+      this.feedWaitLimits = { ...FEED_WAIT_LIMITS };
+      this.pendingFeedUpdates = new Map();
     }
 
     async startup() {
@@ -1303,6 +1320,8 @@
 
     endWorkflowProgress(workflow, progress) {
       if (!progress) return;
+      if (progress.workflowFinished) return;
+      progress.workflowFinished = true;
       try {
         progress.close?.();
       } catch (_) {
@@ -1429,14 +1448,8 @@
       addItem(MENU_DAYS_ID, this.t("menu.scoreDays"), () => this.scoreFeedItemsWithinDays(window));
       addItem(MENU_RESCORE_DAYS_ID, this.t("menu.rescoreDays"), () =>
         this.scoreFeedItemsWithinDays(window, undefined, { mode: "rescore" }));
-      /*
-       * The on-demand weekly command, named for what the reader gets.
-       *
-       * It was "Run weekly job now", which described the machinery. What arrives is
-       * the week's digest -- rebuilt from this week's eligible scores and sent -- so
-       * the menu says that instead.
-       */
-      addItem(MENU_WEEKLY_NOW_ID, this.t("menu.sendDigest"), () => this.runWeekly(new Date(), { manual: true }));
+      // Explicit refresh / scoring followed by a preview and separate Send click.
+      addItem(MENU_WEEKLY_NOW_ID, this.t("menu.sendDigest"), () => this.runRefreshAndEmail(window));
       addItem(MENU_RESULTS_ID, this.t("menu.showScores"), () => this.showStoredResults(window));
       popup.appendChild(separator);
       addItem(MENU_SETTINGS_ID, this.t("menu.settings"), () => this.openSettings(window));
@@ -1444,6 +1457,7 @@
       const previousFacade = window.FeedRanker;
       const facade = {
         refreshAndScore: () => this.runManualRefresh(window),
+        refreshAndEmail: () => this.runRefreshAndEmail(window),
         scoreWithinDays: () => this.scoreFeedItemsWithinDays(window),
         // Two scoring functions, and only two: "score" fills in what is missing,
         // "rescore" replaces what is stored. `rescoreLast` is kept as the old name
@@ -1905,7 +1919,39 @@
       return compact;
     }
 
+    // Keep synchronous readers/saves for the column API and older callers. The
+    // workflow transaction drains the same steps cooperatively on Gecko's UI
+    // thread, rather than duplicating persistence logic or using a worker.
+    drainStateSteps(steps) {
+      let next;
+      do { next = steps.next(); } while (!next.done);
+      return next.value;
+    }
+
+    async drainStateStepsAsync(steps) {
+      await this.delay(0);
+      let sliceStarted = Date.now();
+      let checkpoints = 0;
+      let next;
+      try {
+        while (!(next = steps.next()).done) {
+          if (++checkpoints >= 256 || Date.now() - sliceStarted >= 8) {
+            await this.delay(0);
+            checkpoints = 0;
+            sliceStarted = Date.now();
+          }
+        }
+        return next.value;
+      } finally {
+        steps.return?.();
+      }
+    }
+
     compactRanksForState(rawRanks, config = this.loadConfig()) {
+      return this.drainStateSteps(this.compactRanksForStateSteps(rawRanks, config));
+    }
+
+    *compactRanksForStateSteps(rawRanks, config) {
       const entries = [];
       for (const [mapKey, rawRecord] of Object.entries(asObject(rawRanks))) {
         const key = boundedStateText(mapKey, 256);
@@ -1922,6 +1968,7 @@
           current: this.isCurrentScoreRecord(compact, config),
           rankedAt: Date.parse(compact.rankedAt) || 0,
         });
+        yield;
       }
       entries.sort((left, right) =>
         Number(right.current) - Number(left.current) ||
@@ -1939,6 +1986,7 @@
           throw new Error("A FeedRank score record could not be compacted safely for persistence");
         }
         ranks[entry.key] = entry.record;
+        yield;
       }
       return ranks;
     }
@@ -1952,7 +2000,9 @@
       const count = Number(descriptor.count);
       const contentHash = boundedStateText(descriptor.contentHash, 64);
       if (!Number.isSafeInteger(count) || count < 0 || !contentHash) return null;
-      return { count, contentHash };
+      const generation = boundedStateText(descriptor.generation, 64);
+      if (descriptor.generation != null && !/^v1-[a-z0-9]+-[a-z0-9]+$/i.test(generation)) return null;
+      return { count, contentHash, ...(generation ? { generation } : {}) };
     }
 
     validStateShardStorage(rawStorage) {
@@ -1960,8 +2010,10 @@
       const generation = boundedStateText(storage.generation, 64);
       const ranks = this.validStateShardDescriptor(storage.ranks);
       const candidates = this.validStateShardDescriptor(storage.candidates);
-      if (!/^v1-[a-z0-9]+-[a-z0-9]+$/i.test(generation) || !ranks || !candidates) return null;
-      return { version: 1, generation, ranks, candidates };
+      const email = storage.email == null ? null : this.validStateShardDescriptor(storage.email);
+      if (!/^v1-[a-z0-9]+-[a-z0-9]+$/i.test(generation) || !ranks || !candidates ||
+          (storage.email != null && !email)) return null;
+      return { version: 1, generation, ranks, candidates, ...(email ? { email } : {}) };
     }
 
     stateShardGeneration() {
@@ -1970,12 +2022,35 @@
     }
 
     stateEntriesHash(entries) {
-      const serialized = JSON.stringify(entries);
-      if (typeof this.Core.fnv1a === "function") return "fnv1a-v1:" + this.Core.fnv1a(serialized);
-      return "length-" + utf8ByteLength(serialized);
+      return this.drainStateSteps(this.stateEntriesHashSteps(entries));
+    }
+
+    *stateEntriesHashSteps(entries) {
+      // Stream the exact JSON array encoding. This retains fnv1a-v1 hashes
+      // from older XPIs without building/hash-looping one huge string.
+      let hash = 0x811c9dc5;
+      let bytes = 0;
+      const useFNV = typeof this.Core.fnv1a === "function";
+      const source = Array.isArray(entries) ? entries : [];
+      for (let index = -1; index <= source.length; index++) {
+        const chunk = index === -1 ? "[" : index === source.length ? "]"
+          : (index ? "," : "") + (JSON.stringify(source[index]) ?? "null");
+        if (!useFNV) bytes += utf8ByteLength(chunk);
+        else for (let offset = 0; offset < chunk.length; offset++) {
+          hash ^= chunk.charCodeAt(offset);
+          hash = Math.imul(hash, 0x01000193);
+          if ((offset + 1) % 8192 === 0) yield;
+        }
+        yield;
+      }
+      return useFNV ? "fnv1a-v1:" + (hash >>> 0).toString(16).padStart(8, "0") : "length-" + bytes;
     }
 
     shardStateEntries(entries) {
+      return this.drainStateSteps(this.shardStateEntriesSteps(entries));
+    }
+
+    *shardStateEntriesSteps(entries) {
       const source = Array.isArray(entries) ? entries : [];
       const shards = [];
       let shard = [];
@@ -1994,22 +2069,28 @@
         }
         shard.push(entry);
         shardBytes += (shard.length === 1 ? 0 : 1) + entryBytes;
+        yield;
       }
       if (shard.length) shards.push(shard);
       return shards;
     }
 
     loadStateShardEntries(kind, rawStorage) {
+      return this.drainStateSteps(this.loadStateShardEntriesSteps(kind, rawStorage));
+    }
+
+    *loadStateShardEntriesSteps(kind, rawStorage) {
       const storage = this.validStateShardStorage(rawStorage);
       const descriptor = storage?.[kind];
       if (!storage || !descriptor) return null;
       const entries = [];
       try {
         for (let index = 0; index < descriptor.count; index++) {
-          const raw = this.Zotero.Prefs.get(this.stateShardKey(storage.generation, kind, index));
+          const raw = this.Zotero.Prefs.get(this.stateShardKey(descriptor.generation || storage.generation, kind, index));
           const shard = JSON.parse(raw || "[]");
           if (!Array.isArray(shard)) return null;
           entries.push(...shard);
+          yield;
         }
       } catch (_) {
         return null;
@@ -2017,56 +2098,74 @@
       // A complete generation is only usable when its descriptor matches the
       // exact concatenated shard entries. In particular, a missing shard must
       // not be interpreted as an empty array and silently drop N-day results.
-      if (this.stateEntriesHash(entries) !== descriptor.contentHash) return null;
+      if ((yield* this.stateEntriesHashSteps(entries)) !== descriptor.contentHash) return null;
       return entries;
     }
 
     persistStateGeneration(rawParts, previousStorage = null) {
+      return this.drainStateSteps(this.persistStateGenerationSteps(rawParts, previousStorage));
+    }
+
+    *persistStateGenerationSteps(rawParts, previousStorage = null) {
       const parts = asObject(rawParts);
       const entriesByKind = {
         ranks: Array.isArray(parts.ranks) ? parts.ranks : [],
         candidates: Array.isArray(parts.candidates) ? parts.candidates : [],
+        email: Array.isArray(parts.email) ? parts.email : [],
       };
-      const descriptors = {
-        ranks: { contentHash: this.stateEntriesHash(entriesByKind.ranks) },
-        candidates: { contentHash: this.stateEntriesHash(entriesByKind.candidates) },
-      };
+      const descriptors = {};
+      for (const kind of ["ranks", "candidates", "email"]) {
+        descriptors[kind] = { contentHash: yield* this.stateEntriesHashSteps(entriesByKind[kind]) };
+      }
       const previous = this.validStateShardStorage(previousStorage);
-      // One state-generation pointer covers ranks and candidate references.
-      // Reuse it only when both payloads are unchanged; otherwise write every
-      // shard in a new generation before the pointer is updated in saveState().
+      // One atomic pointer covers ranks, candidate references and email bytes.
+      // Each descriptor can retain its own generation. Email status changes
+      // must not rewrite every saved score and rerun reference.
       if (previous &&
           previous.ranks.contentHash === descriptors.ranks.contentHash &&
-          previous.candidates.contentHash === descriptors.candidates.contentHash) {
+          previous.candidates.contentHash === descriptors.candidates.contentHash &&
+          previous.email?.contentHash === descriptors.email.contentHash) {
         return previous;
       }
       const generation = this.stateShardGeneration();
       // Write a complete new generation before the small main-state pointer is
       // changed. If an individual write fails, the previous generation remains
       // the active readable state and no paper is silently discarded.
-      for (const kind of ["ranks", "candidates"]) {
-        const shards = this.shardStateEntries(entriesByKind[kind]);
+      for (const kind of ["ranks", "candidates", "email"]) {
+        if (previous?.[kind]?.contentHash === descriptors[kind].contentHash) {
+          descriptors[kind] = { ...previous[kind], generation: previous[kind].generation || previous.generation };
+          continue;
+        }
+        const shards = yield* this.shardStateEntriesSteps(entriesByKind[kind]);
         descriptors[kind].count = shards.length;
         for (let index = 0; index < shards.length; index++) {
           this.Zotero.Prefs.set(
             this.stateShardKey(generation, kind, index),
             JSON.stringify(shards[index]),
           );
+          yield;
         }
       }
       return { version: 1, generation, ...descriptors };
     }
 
-    clearStateGeneration(rawStorage) {
+    clearStateGeneration(rawStorage, retainedStorage = null) {
+      this.drainStateSteps(this.clearStateGenerationSteps(rawStorage, retainedStorage));
+    }
+
+    *clearStateGenerationSteps(rawStorage, retainedStorage = null) {
       const storage = this.validStateShardStorage(rawStorage);
+      const retained = this.validStateShardStorage(retainedStorage);
       if (!storage) return;
       // This runs only after the primary pointer has committed a different
       // complete generation. Clear exact old FeedRank keys best-effort: a
       // cleanup failure leaves recoverable stale data, never the active run.
-      for (const kind of ["ranks", "candidates"]) {
+      for (const kind of ["ranks", "candidates", "email"]) {
+        const generation = storage[kind]?.generation || storage.generation;
+        if (retained?.[kind] && (retained[kind].generation || retained.generation) === generation) continue;
         const count = storage[kind]?.count || 0;
         for (let index = 0; index < count; index++) {
-          const key = this.stateShardKey(storage.generation, kind, index);
+          const key = this.stateShardKey(generation, kind, index);
           try {
             if (typeof this.Zotero.Prefs?.clear === "function") {
               this.Zotero.Prefs.clear(key);
@@ -2074,12 +2173,17 @@
               this.Services.prefs?.clearUserPref?.("extensions.zotero." + key);
             }
           } catch (_) {}
+          yield;
         }
       }
     }
 
     loadPersistedRanks(rawStorage) {
-      const entries = this.loadStateShardEntries("ranks", rawStorage);
+      return this.drainStateSteps(this.loadPersistedRanksSteps(rawStorage));
+    }
+
+    *loadPersistedRanksSteps(rawStorage) {
+      const entries = yield* this.loadStateShardEntriesSteps("ranks", rawStorage);
       if (entries == null) return null;
       const ranks = {};
       for (const entry of entries) {
@@ -2087,11 +2191,16 @@
         const key = boundedStateText(entry[0], 256);
         const record = asObject(entry[1]);
         if (key && boundedStateText(record.id, 256) === key) ranks[key] = record;
+        yield;
       }
       return ranks;
     }
 
     compactLastCandidatesForState(rawCandidates) {
+      return this.drainStateSteps(this.compactLastCandidatesForStateSteps(rawCandidates));
+    }
+
+    *compactLastCandidatesForStateSteps(rawCandidates) {
       const candidates = Array.isArray(rawCandidates) ? rawCandidates : [];
       const references = [];
       const seen = new Set();
@@ -2106,6 +2215,7 @@
         if (seen.has(reference.id)) continue;
         seen.add(reference.id);
         references.push(reference);
+        yield;
       }
       return references;
     }
@@ -2291,7 +2401,7 @@
         "undatedItemCount", "outsideWindowItemCount", "lookbackDays",
         "fallbackLookbackDays", "fallbackScannedItemCount", "fallbackRecentItemCount",
         "fallbackCurrentScoreCount", "fallbackCandidateCount", "fallbackDuplicateCount",
-        "settleRounds", "settledItemCount",
+        "settleRounds", "settledItemCount", "timeoutCount", "skippedFeedCount", "deferredFeedCount",
       ]) {
         if (raw[key] == null) continue;
         compact[key] = boundedStateCount(
@@ -2305,6 +2415,8 @@
       }
       if (raw.fallbackUsed === true) compact.fallbackUsed = true;
       if (raw.recoveredForRescore === true) compact.recoveredForRescore = true;
+      if (raw.incomplete === true) compact.incomplete = true;
+      if (raw.refreshBudgetExhausted === true) compact.refreshBudgetExhausted = true;
       const candidateSource = boundedStateText(raw.candidateSource, 64);
       if (candidateSource) compact.candidateSource = candidateSource;
       const compactFeedList = (key, countKey, includeMessage) => {
@@ -2320,6 +2432,12 @@
           if (includeMessage) {
             const message = boundedStateText(source.message, MAX_PERSISTED_REFRESH_TEXT);
             if (message) result.message = message;
+            const stage = boundedStateText(source.stage, 64);
+            const code = boundedStateText(source.code, 64);
+            if (stage) result.stage = stage;
+            if (code) result.code = code;
+            if (source.timedOut === true) result.timedOut = true;
+            if (source.skipped === true) result.skipped = true;
           }
           return result;
         });
@@ -2342,25 +2460,76 @@
     }
 
     loadState() {
+      return this.drainStateSteps(this.loadStateSteps());
+    }
+
+    async loadStateAsync() {
+      // Respect injected adapters (including existing local test fixtures).
+      if (this.loadState !== FeedRankerService.prototype.loadState) return this.loadState();
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const raw = this.readPluginPreference(PREF_STATE, LEGACY_PREF_STATE, BROKEN_PREF_STATE) || "{}";
+        const state = await this.drainStateStepsAsync(this.loadStateSteps(raw));
+        const latest = this.readPluginPreference(PREF_STATE, LEGACY_PREF_STATE, BROKEN_PREF_STATE) || "{}";
+        if (raw === latest) return state;
+        // A concurrent commit can retire the shards an asynchronous reader was
+        // visiting. Retry that new pointer, not a false corruption report. Log-
+        // only updates retain all descriptors and do not require another scan.
+        let storage = null;
+        try { storage = this.validStateShardStorage(asObject(JSON.parse(latest)).stateStorage); } catch (_) {}
+        if (storage && JSON.stringify(storage) === JSON.stringify(state.stateStorage)) return state;
+      }
+      throw new Error("FeedRank saved state changed while loading. Try again after the active run finishes.");
+    }
+
+    loadJournalCache() {
+      // Journal evidence lives in the primary preference, not the score/email
+      // shards. Repeated misses while drawing hundreds of rows only parse this
+      // once. A changed preference invalidates it, including a newly found title.
+      const raw = this.readPluginPreference(PREF_STATE, LEGACY_PREF_STATE, BROKEN_PREF_STATE) || "{}";
+      if (this.journalCacheSnapshot?.raw === raw) return this.journalCacheSnapshot.cache;
+      let cache = {};
+      try { cache = asObject(asObject(JSON.parse(raw)).journalCache); } catch (_) {}
+      this.journalCacheSnapshot = { raw, cache };
+      return cache;
+    }
+
+    *loadStateSteps(rawPrimary) {
       let parsed = {};
       try {
-        parsed = asObject(JSON.parse(this.readPluginPreference(
+        parsed = asObject(JSON.parse((rawPrimary ?? this.readPluginPreference(
           PREF_STATE,
           LEGACY_PREF_STATE,
           BROKEN_PREF_STATE,
-        ) || "{}"));
+        )) || "{}"));
       } catch (_) {
         parsed = {};
       }
       const rawStateStorage = asObject(parsed.stateStorage);
       const declaresStateStorage = Object.keys(rawStateStorage).length > 0;
       const stateStorage = this.validStateShardStorage(rawStateStorage);
-      const shardedRanks = stateStorage ? this.loadPersistedRanks(stateStorage) : null;
+      const shardedRanks = stateStorage ? yield* this.loadPersistedRanksSteps(stateStorage) : null;
       const candidateEntries = stateStorage
-        ? this.loadStateShardEntries("candidates", stateStorage)
+        ? yield* this.loadStateShardEntriesSteps("candidates", stateStorage)
         : null;
+      // Legacy installs keep email state inline. New generations split its
+      // exact JSON into 16K-character chunks: even JSON escaping / UTF-8 stays
+      // below the 128K-byte preference budget, without changing frozen bytes.
+      let emailState = parsed;
+      let emailIntegrityError = false;
+      if (stateStorage?.email) {
+        const chunks = yield* this.loadStateShardEntriesSteps("email", stateStorage);
+        try {
+          if (!chunks || chunks.some((chunk) => typeof chunk !== "string")) {
+            throw new Error("Missing email state shards");
+          }
+          emailState = chunks.length ? JSON.parse(chunks.join("")) : {};
+          if (!emailState || typeof emailState !== "object" || Array.isArray(emailState)) {
+            throw new Error("Invalid email state shards");
+          }
+        } catch (_) { emailIntegrityError = true; }
+      }
       const stateIntegrityError = declaresStateStorage && (!stateStorage ||
-        shardedRanks == null || candidateEntries == null)
+        shardedRanks == null || candidateEntries == null || emailIntegrityError)
         ? "FeedRank saved-state integrity check failed. Existing scored results were preserved and will not be overwritten; rerun after restoring or clearing the affected FeedRank state."
         : "";
       const usage = this.compactUsageState(
@@ -2390,9 +2559,8 @@
         lastUsageCallCount: usage.callCount,
         lastUsageHistoryTruncated: usage.historyTruncated,
         // Delivery payloads are deliberately separate from scoring data. They
-        // contain no API key; a FeedRank email service validates and bounds
-        // them before persistence so an exact submission can be retried with
-        // the same idempotency key after a known provider failure.
+        // contain no credential; the email service validates and bounds them.
+        // A provably-unsent SMTP retry uses exactly the same frozen wire bytes.
         /*
          * The schedule's own log has to be LOADED, not merely saved.
          *
@@ -2407,8 +2575,8 @@
           .filter((line) => typeof line === "string" && line)
           .map((line) => line.slice(0, 400))
           .slice(-20),
-        emailDelivery: asObject(parsed.emailDelivery),
-        emailSubmissions: asObject(parsed.emailSubmissions),
+        emailDelivery: asObject(emailState.emailDelivery),
+        emailSubmissions: asObject(emailState.emailSubmissions),
         // Cached EasyScholar journal metrics, keyed by normalized publication
         // name. This holds only displayed metrics — never the secret key, which
         // lives exclusively in the journal service's Login Manager entry.
@@ -2417,16 +2585,39 @@
     }
 
     saveState(state) {
+      return this.drainStateSteps(this.saveStateSteps(state));
+    }
+
+    saveStateAsync(state, options = {}) {
+      if (this.saveState !== FeedRankerService.prototype.saveState) {
+        options.beforeCommit?.();
+        return Promise.resolve(this.saveState(state));
+      }
+      return this.drainStateStepsAsync(this.saveStateSteps(state, options));
+    }
+
+    *saveStateSteps(state, { beforeCommit } = {}) {
       if (this.Core.text(state?.stateIntegrityError)) {
         throw new Error(this.Core.text(state.stateIntegrityError));
       }
       const config = this.loadConfig();
       const previousStorage = this.validStateShardStorage(state.stateStorage);
-      state.ranks = this.compactRanksForState(asObject(state.ranks), config);
-      state.lastCandidates = this.compactLastCandidatesForState(state.lastCandidates);
-      state.stateStorage = this.persistStateGeneration({
+      state.ranks = yield* this.compactRanksForStateSteps(asObject(state.ranks), config);
+      state.lastCandidates = yield* this.compactLastCandidatesForStateSteps(state.lastCandidates);
+      state.emailDelivery = asObject(state.emailDelivery);
+      state.emailSubmissions = asObject(state.emailSubmissions);
+      const emailJSON = Object.keys(state.emailDelivery).length || Object.keys(state.emailSubmissions).length
+        ? JSON.stringify({ emailDelivery: state.emailDelivery, emailSubmissions: state.emailSubmissions })
+        : "";
+      const emailChunks = [];
+      for (let offset = 0; offset < emailJSON.length; offset += 16000) {
+        emailChunks.push(emailJSON.slice(offset, offset + 16000));
+        yield;
+      }
+      state.stateStorage = yield* this.persistStateGenerationSteps({
         ranks: Object.entries(state.ranks),
         candidates: state.lastCandidates,
+        email: emailChunks,
       }, state.stateStorage);
       state.lastRefresh = this.compactRefreshForState(state.lastRefresh);
       const usage = this.compactUsageState(
@@ -2448,32 +2639,42 @@
         .map((line) => line.slice(0, 400))
         .slice(-20);
       // Only the atomic generation pointer is held in the primary state
-      // preference. Both rank records and rerun references were completely
+      // preference. Scores, rerun references and non-secret email bytes were
       // written before this pointer moves, so an interrupted save cannot
       // produce a partly retained N-day scoring run.
       const persistedState = {
         ...state,
         ranks: {},
         lastCandidates: [],
+        emailDelivery: {},
+        emailSubmissions: {},
       };
       delete persistedState.stateIntegrityError;
+      // Cooperative saves allow Cancel to arrive while shards are being staged.
+      // A scoring transaction rechecks its workflow here, with no await between
+      // that check and the atomic pointer write. Staged shards are not active.
+      beforeCommit?.();
       this.Zotero.Prefs.set(PREF_STATE, JSON.stringify(persistedState));
-      if (previousStorage && previousStorage.generation !== state.stateStorage.generation) {
-        this.clearStateGeneration(previousStorage);
+      // Invalidate the column only when its inputs change, not for every email
+      // status/log update. The primary pointer is committed before any cleanup.
+      if (!previousStorage || previousStorage.ranks.contentHash !== state.stateStorage.ranks.contentHash) {
+        this.rankLookup = null;
       }
-      this.rankLookup = null;
+      if (previousStorage && previousStorage.generation !== state.stateStorage.generation) {
+        yield* this.clearStateGenerationSteps(previousStorage, state.stateStorage);
+      }
     }
 
-    mutateState(mutator) {
+    mutateState(mutator, { returnState = true, beforeCommit } = {}) {
       if (typeof mutator !== "function") {
         return Promise.reject(new Error("FeedRank state mutator must be a function"));
       }
       const run = async () => {
-        const state = this.loadState();
+        const state = await this.loadStateAsync();
         const result = await mutator(state);
         const nextState = result === undefined ? state : result;
-        this.saveState(nextState);
-        return cloneJSON(nextState);
+        await this.saveStateAsync(nextState, { beforeCommit });
+        return returnState ? cloneJSON(nextState) : undefined;
       };
       // Keep the tail settled so one failed persistence attempt does not
       // permanently prevent a later explicit action from saving its state.
@@ -3071,7 +3272,7 @@
         this.mutateState((state) => {
           state.weeklyLog = [...(Array.isArray(state.weeklyLog) ? state.weeklyLog : []), line].slice(-20);
           return state;
-        }).catch(() => {});
+        }, { returnState: false }).catch(() => {});
       } catch (_) {
         // Never let bookkeeping break the thing being booked.
       }
@@ -3269,6 +3470,10 @@
 
     async runWeekly(now = new Date(), { manual = false } = {}) {
       if (this.weeklyStarted || this.shuttingDown) return;
+      if (this.activeRun) {
+        if (manual) this.notifyWarn("A feed refresh or scoring operation is already running.");
+        return;
+      }
       this.weeklyStarted = true;
       const window = this.getActiveMainWindow();
       if (!window) {
@@ -3290,13 +3495,11 @@
          * and is handed to the scoring stage, so the invariant of one window per run
          * still holds.
          */
-        const progress = this.beginWorkflowProgress(
-          window,
-          workflow,
-          this.t("progress.weeklyRun"),
-          this.t("progress.starting"),
-        );
+        let progress;
         try {
+          progress = this.beginWorkflowProgress(
+            window, workflow, this.t("progress.weeklyRun"), this.t("progress.starting"),
+          );
           const anchor = this.currentRunAnchor(now);
           if (this.loadState().weeklyPromptWeek === anchor && !manual) return;
           // Whatever happens from here, the window at the end reports the email of
@@ -3324,21 +3527,21 @@
           // one day, one week, or one month of papers must collect exactly that much.
           summary = await this.refreshAndCollect(
             window,
-            { ...this.loadConfig(), lookbackDays },
+            { ...this.loadConfig(), lookbackDays, includePeriodBacklog: true },
             workflow,
             progress,
           );
           this.throwIfCancelled(workflow, progress);
           await this.mutateState((state) => {
             this.retainLatestCandidateSnapshot(state, summary);
-            state.weeklyPromptWeek = anchor;
             return state;
-          });
+          }, { returnState: false });
           // The standing approval is read once, before either branch: a week with
           // no NEW articles still has the week's already-scored articles, and the
           // digest is a digest of those.
           this.noteRunStage("checking the weekly email approval");
           const approval = await this.confirmWeeklyEmailDelivery(window);
+          this.throwIfCancelled(workflow, progress);
           const autoSendApproved = approval.approved === true;
           if (!summary.candidates.length) {
             if (summary.refresh.failedFeeds?.length) this.showRefreshOutcome(window, summary.refresh);
@@ -3349,6 +3552,8 @@
             this.noteRunStage("sending the week's digest from the scores already stored");
             progress.update(this.t("progress.preparingDigest"), 1, 1);
             await this.sendWeeklyDigestFromCache(window, {
+              scheduleAnchor: anchor,
+              workflow, progress,
               autoSendApproved,
               approvalReason: approval.reason,
               reason: "no new articles needed scoring",
@@ -3384,11 +3589,17 @@
             // list nor a window is passed here.
             digestRun: {
               runID: this.makeWeeklyDigestRunID(anchor),
+              scheduleAnchor: anchor,
               autoSendApproved,
               approvalReason: approval.reason,
             },
           });
-          this.noteRunFinished("completed");
+          if (this.loadState().weeklyPromptWeek !== anchor) {
+            await this.mutateState((state) => { state.weeklyPromptWeek = anchor; });
+          }
+          this.noteRunFinished(this.lastDigestOutcome?.sent === true
+            ? "scoring completed; SMTP server accepted the digest"
+            : "scoring completed; email not sent");
           this.reportScheduledRun(summary, { manual });
         } catch (error) {
           if (error instanceof CancelledError) {
@@ -3419,6 +3630,7 @@
           this.weeklyLog("run FAILED: " + this.safeError(error));
           this.logError(error);
         } finally {
+          this.endWorkflowProgress(workflow, progress);
           // The flag clears whatever happened, so it can never claim a run that is
           // no longer running.
           if (this.runState?.active) this.noteRunFinished("did not complete");
@@ -3453,11 +3665,20 @@
      * reason, worded for the reader ("3 articles were scored in the last 7 days, but
      * none reached the digest's Minimum relevance Score of 70").
      */
-    async recordCompletedDigest(digestRun, window) {
+    async recordCompletedDigest(digestRun, window, { workflow, progress } = {}) {
       if (!digestRun) return null;
-      const selection = this.weeklyDigestSelection();
+      this.throwIfCancelled(workflow, progress);
+      // Scoring must finish before the period is consumed. Persist the marker
+      // BEFORE the email attempt, however: a crash, rejection or uncertain SMTP
+      // outcome must never cause a timer to authenticate/resubmit every minute.
+      if (digestRun.scheduleAnchor) {
+        await this.mutateState((state) => { state.weeklyPromptWeek = digestRun.scheduleAnchor; }, { returnState: false });
+      }
+      const selection = await this.weeklyDigestSelectionAsync();
+      this.throwIfCancelled(workflow, progress);
       if (!selection.records.length) {
         const reason = this.Core.text(selection.reason) || "no eligible articles";
+        await this.Zotero.FeedRankEmail?.invalidateSnapshot?.(reason);
         this.lastDigestOutcome = { sent: false, message: this.t("email.nothingEligible", { reason }) };
         this.weeklyLog("digest not prepared: " + reason);
         this.notifyQuiet("The scheduled run finished with nothing to email: " + reason);
@@ -3504,6 +3725,8 @@
         const reason = this.safeError(error);
         this.lastDigestOutcome = { sent: false, message: reason };
         this.weeklyLog("digest FAILED: " + reason);
+        this.notifyError("FeedRank scored the articles, but could not prepare email: " + reason +
+          " Use Refresh & email… to retry with a preview.");
         this.logError(new Error("Could not prepare FeedRank weekly email: " + reason));
         return null;
       }
@@ -3518,13 +3741,15 @@
      * duplicating the definition.
      */
     async sendWeeklyDigestFromCache(window, {
-      autoSendApproved = false, approvalReason = "", reason = "",
+      autoSendApproved = false, approvalReason = "", reason = "", scheduleAnchor = "",
+      workflow, progress,
     } = {}) {
       const outcome = await this.recordCompletedDigest({
         runID: this.makeWeeklyDigestRunID(this.Core.localDay()),
+        scheduleAnchor,
         autoSendApproved,
         approvalReason,
-      }, window);
+      }, window, { workflow, progress });
       if (!outcome && reason) {
         this.weeklyLog("no digest for a quiet week (" + reason + ")");
       }
@@ -3556,6 +3781,9 @@
         : successes + failures;
       const split = asObject(this.lastRunSplit);
       const lines = [this.t("run.outcomeHeading")];
+      if (refresh.incomplete) lines.push(this.t("feed.incomplete", {
+        timeouts: refresh.timeoutCount || 0, skipped: refresh.skippedFeedCount || 0,
+      }));
       if (total || successes) {
         lines.push(
           this.t("run.feeds", {
@@ -3862,6 +4090,66 @@
           refresh: summary.refresh,
           workflow,
         });
+      });
+    }
+
+    // On-demand manual workflow. It uses the cadence's 1/7/30-day scope,
+    // fills missing/stale scores, then opens an exact SMTP preview. The automatic
+    // opt-in is intentionally not consulted and nothing is sent by this method.
+    async runRefreshAndEmail(parentWindow) {
+      const window = this.getActiveMainWindow() || parentWindow;
+      return this.withWorkflowLock(window, "manual refresh and email", async (workflow) => {
+        const config = this.loadConfig();
+        const lookbackDays = scheduledLookbackDays(config.runFrequency);
+        const progress = this.beginWorkflowProgress(window, workflow,
+          this.t("menu.sendDigest"), this.t("progress.starting"));
+        this.lastDigestOutcome = null;
+        this.lastRunSplit = null;
+        this.noteRunStarted("manual", "refresh and email preview");
+        try {
+          this.noteRunStage("refreshing feeds and checking the last " + lookbackDays + " days");
+          const summary = await this.refreshAndCollect(window,
+            { ...config, lookbackDays, includePeriodBacklog: true }, workflow, progress);
+          this.throwIfCancelled(workflow, progress);
+          await this.mutateState((state) => this.retainLatestCandidateSnapshot(state, summary));
+          if (summary.candidates.length) {
+            this.noteRunStage("scoring " + summary.candidates.length + " missing or stale articles");
+            await this.waitForAwesomeGPT(window, 30000, workflow);
+            this.throwIfCancelled(workflow, progress);
+            await this.rankAndDisplay(window, summary.candidates, {
+              refresh: summary.refresh, workflow, progress, showResults: false,
+            });
+          }
+          this.throwIfCancelled(workflow, progress);
+          this.noteRunStage("building the digest from this period's existing scores");
+          progress?.update?.(this.t("progress.preparingDigest"), 1, 1);
+          const built = await this.rebuildWeeklyDigest(window);
+          this.throwIfCancelled(workflow, progress);
+          if (!built.available) throw new Error(built.reason || "No eligible scored articles are available");
+          const email = this.Zotero.FeedRankEmail;
+          if (typeof email?.openPreview !== "function") throw new Error(this.t("email.serviceMissing"));
+          this.endWorkflowProgress(workflow, progress);
+          const preview = await email.openPreview({ parentWindow: window });
+          this.lastDigestOutcome = { sent: false, message: "Preview ready; use Send after reviewing the exact recipient and content." };
+          this.weeklyLog("manual refresh and email: " + (built.snapshot?.recordCount || built.articleCount) +
+            " articles prepared; awaiting explicit Send (no email submitted)");
+          this.noteRunFinished("preview ready; awaiting explicit Send");
+          return { previewReady: true, snapshot: built.snapshot, preview, refresh: summary.refresh };
+        } catch (error) {
+          if (error instanceof CancelledError) {
+            this.noteRunFinished("cancelled; no email submitted");
+            return { cancelled: true };
+          }
+          const reason = this.safeError(error);
+          this.lastDigestOutcome = { sent: false, message: reason };
+          this.weeklyLog("manual refresh and email FAILED: " + reason);
+          this.notifyError("Refresh & email did not complete: " + reason);
+          this.noteRunFinished("email preview failed");
+          return { previewReady: false, reason };
+        } finally {
+          this.endWorkflowProgress(workflow, progress);
+          if (this.runState?.active) this.noteRunFinished("did not complete");
+        }
       });
     }
 
@@ -4222,7 +4510,175 @@
       });
     }
 
-    async collectFeedItemsWithinDays(days, workflow, scope = null, progress = null) {
+    feedIdentity(feed) {
+      const id = Number(feed?.libraryID);
+      return Number.isSafeInteger(id) && id >= 0 ? id : feed;
+    }
+
+    createFeedRefreshContext() {
+      const limits = {};
+      for (const [key, fallback] of Object.entries(FEED_WAIT_LIMITS)) {
+        const value = Number(this.feedWaitLimits?.[key]);
+        limits[key] = Number.isFinite(value) && value > 0 ? value : fallback;
+      }
+      return {
+        limits, deadline: Date.now() + limits.totalMs, exhausted: false,
+        skippedFeeds: new Set(), unavailableFeeds: new Set(), loggedFailures: new Set(),
+      };
+    }
+
+    waitForFeedOperation(operation, {
+      feed, stage = "scan", workflow, progress, context = this.createFeedRefreshContext(),
+      current = 1, total = 1, timeoutMs = context.limits.dataMs,
+    } = {}) {
+      const name = this.Core.text(feed?.name) || "Unnamed feed";
+      const key = this.feedIdentity(feed);
+      const started = Date.now();
+      const available = context.deadline - started;
+      const timeout = Math.min(timeoutMs, available);
+      const stageLabel = this.t("feed.stage." + stage);
+      const timeoutError = () => {
+        const wholeRun = Date.now() >= context.deadline;
+        if (wholeRun) context.exhausted = true;
+        if (stage !== "update") context.unavailableFeeds.add(key);
+        return new FeedRefreshError(wholeRun ? "FEED_RUN_TIMEOUT" : "FEED_TIMEOUT",
+          this.t(wholeRun ? "feed.runTimeout" : "feed.timeout", {
+            name, stage: stageLabel, seconds: Math.ceil((wholeRun ? context.limits.totalMs : timeoutMs) / 1000),
+          }), stage);
+      };
+      // Check before invoking the factory: a cancelled/exhausted workflow must
+      // not start another native update or read as a side effect.
+      try {
+        this.throwIfCancelled(workflow, progress);
+        if (available <= 0) throw timeoutError();
+        if (context.skippedFeeds.has(key)) {
+          throw new FeedRefreshError("FEED_SKIPPED", this.t("feed.skipped", { name }), stage);
+        }
+      } catch (error) { return Promise.reject(error); }
+
+      return new Promise((resolve, reject) => {
+        let settled = false, deadlineTimer, pollTimer;
+        let lastDisplay = 0;
+        const finish = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadlineTimer);
+          clearInterval(pollTimer);
+          try { progress?.setSkipCurrentFeed?.(null); } catch (_) {}
+          if (error && !(error instanceof CancelledError) && !(error instanceof FeedRefreshError)) {
+            error = new FeedRefreshError("FEED_ERROR", this.safeError(error), stage);
+          }
+          error ? reject(error) : resolve(value);
+        };
+        const display = () => {
+          const elapsed = Math.max(0, Date.now() - started);
+          if (lastDisplay && elapsed - lastDisplay < 1000) return;
+          lastDisplay = elapsed || 1;
+          const message = this.t("progress.feedStage", {
+            name, current, total, remaining: Math.max(0, total - current), stage: stageLabel,
+            elapsed: Math.floor(elapsed / 1000), limit: Math.ceil(timeout / 1000),
+          });
+          try { progress?.update?.(message, Math.max(0, current - 1), Math.max(1, total)); } catch (_) {}
+          // Pane polling reads this without an expensive state/log rewrite on
+          // every heartbeat. A failure is logged durably with its exact stage.
+          if (this.runState?.active) this.runState.stage = message;
+        };
+        const check = () => {
+          try {
+            this.throwIfCancelled(workflow, progress);
+            if (Date.now() - started >= timeout || Date.now() >= context.deadline) {
+              finish(timeoutError());
+            } else display();
+          } catch (error) { finish(error); }
+        };
+        deadlineTimer = setTimeout(() => {
+          try { this.throwIfCancelled(workflow, progress); finish(timeoutError()); }
+          catch (error) { finish(error); }
+        }, Math.max(1, timeout));
+        pollTimer = setInterval(check, Math.max(1, context.limits.pollMs));
+        try {
+          progress?.setSkipCurrentFeed?.(feed ? () => {
+            if (settled) return;
+            context.skippedFeeds.add(key);
+            finish(new FeedRefreshError("FEED_SKIPPED", this.t("feed.skipped", { name }), stage));
+          } : null);
+          display();
+          if (settled) return;
+          // Observe both outcomes even after timeout/cancel/skip. Native late
+          // completion can save Zotero items, but never resumes this workflow.
+          Promise.resolve(operation()).then(
+            (value) => {
+              if (settled) return;
+              try {
+                this.throwIfCancelled(workflow, progress);
+                if (Date.now() - started >= timeout) finish(timeoutError());
+                else finish(null, value);
+              } catch (error) { finish(error); }
+            }, (error) => finish(error || new FeedRefreshError("FEED_ERROR", "RSS operation failed", stage)),
+          );
+        } catch (error) { finish(error); }
+      });
+    }
+
+    refreshFeedWithinDeadline(feed, options = {}) {
+      const context = options.context || this.createFeedRefreshContext();
+      const key = this.feedIdentity(feed);
+      if (this.pendingFeedUpdates.has(key)) {
+        return Promise.reject(new FeedRefreshError("FEED_BUSY", this.t("feed.busy", {
+          name: this.Core.text(feed?.name) || "Unnamed feed",
+        }), "update"));
+      }
+      return this.waitForFeedOperation(() => {
+        // Set before invoking updateFeed, including its synchronous throws.
+        const record = {};
+        this.pendingFeedUpdates.set(key, record);
+        const promise = Promise.resolve().then(() => feed.updateFeed());
+        const release = () => {
+          if (this.pendingFeedUpdates.get(key) === record) this.pendingFeedUpdates.delete(key);
+        };
+        promise.then(release, release);
+        return promise;
+      }, { ...options, feed, context, stage: "update", timeoutMs: context.limits.updateMs });
+    }
+
+    recordFeedFailure(refresh, feed, error, context) {
+      const name = this.Core.text(feed?.name) || "Unnamed feed";
+      const libraryID = this.feedIdentity(feed);
+      const failures = refresh.failedFeeds || (refresh.failedFeeds = []);
+      const hasID = typeof libraryID === "number";
+      const prior = failures.find((entry) => hasID ? entry.libraryID === libraryID : entry.name === name);
+      const entry = {
+        name, ...(hasID ? { libraryID } : {}), message: this.safeError(error), stage: error?.stage || "",
+        code: error?.code || "FEED_ERROR", timedOut: ["FEED_TIMEOUT", "FEED_RUN_TIMEOUT"].includes(error?.code),
+        skipped: error?.code === "FEED_SKIPPED",
+      };
+      if (!prior) failures.push(entry);
+      if (Array.isArray(refresh.successfulFeeds)) {
+        refresh.successfulFeeds = refresh.successfulFeeds.filter((item) => hasID ? item.libraryID !== libraryID : item.name !== name);
+      }
+      refresh.incomplete = true;
+      refresh.timeoutCount = failures.filter((item) => item.timedOut).length;
+      refresh.skippedFeedCount = failures.filter((item) => item.skipped).length;
+      if (context?.exhausted) refresh.refreshBudgetExhausted = true;
+      const logKey = String(libraryID) + ":" + entry.code + ":" + entry.stage;
+      if (!context?.loggedFailures.has(logKey)) {
+        context?.loggedFailures.add(logKey);
+        this.weeklyLog("feed " + name + " [" + entry.stage + "]: " + entry.message);
+      }
+    }
+
+    finishFeedBudget(refresh, feeds, index, context) {
+      context.exhausted = true;
+      refresh.refreshBudgetExhausted = true;
+      refresh.deferredFeedCount = Math.max(0, feeds.length - index);
+      for (const feed of feeds.slice(index)) {
+        this.recordFeedFailure(refresh, feed, new FeedRefreshError("FEED_RUN_TIMEOUT",
+          this.t("feed.runTimeout", { name: this.Core.text(feed.name) || "Unnamed feed",
+            stage: this.t("feed.stage.load"), seconds: Math.ceil(context.limits.totalMs / 1000) }), "load"), context);
+      }
+    }
+
+    async collectFeedItemsWithinDays(days, workflow, scope = null, progress = null, context = this.createFeedRefreshContext()) {
       this.throwIfCancelled(workflow, progress);
       const feeds = this.getFeedsForScope(scope);
       const scopeData = this.serializableFeedScope(scope);
@@ -4257,6 +4713,11 @@
       for (let index = 0; index < feeds.length; index++) {
         const feed = feeds[index];
         this.throwIfCancelled(workflow, progress);
+        if (context.exhausted || Date.now() >= context.deadline) {
+          this.finishFeedBudget(refresh, feeds, index, context);
+          break;
+        }
+        if (context.skippedFeeds.has(this.feedIdentity(feed)) || context.unavailableFeeds.has(this.feedIdentity(feed))) continue;
         const name = this.Core.text(feed.name) || "Unnamed feed";
         progress?.update?.(
           "Scanning " + name + " (" + (index + 1) + " of " + feeds.length + ")…",
@@ -4264,15 +4725,22 @@
           feeds.length,
         );
         try {
-          await feed.waitForDataLoad?.("item");
+          const wait = { feed, workflow, progress, context, current: index + 1, total: feeds.length };
+          await this.waitForFeedOperation(() => feed.waitForDataLoad?.("item"), { ...wait, stage: "load" });
           this.throwIfCancelled(workflow, progress);
-          const items = await this.Zotero.Items.getAll(feed.libraryID, true, false);
+          const items = await this.waitForFeedOperation(() => this.Zotero.Items.getAll(feed.libraryID, true, false),
+            { ...wait, stage: "scan" });
           this.throwIfCancelled(workflow, progress);
           refresh.scannedItemCount += items.length;
           const rankableItems = items.filter((item) => this.isRankableItem(item));
           refresh.rankableItemCount += rankableItems.length;
           let feedMatches = 0;
+          let scanned = 0;
           for (const item of rankableItems) {
+            if (++scanned % 32 === 0) {
+              await this.delay(0);
+              this.throwIfCancelled(workflow, progress);
+            }
             const candidate = this.toCandidate(item, feed);
             if (this.isWithinRequestedDays(candidate.date, days)) {
               matchingCandidates.push(candidate);
@@ -4286,10 +4754,10 @@
               refresh.undatedItemCount++;
             }
           }
-          refresh.successfulFeeds.push({ name, itemCount: items.length, matchingItems: feedMatches });
+          refresh.successfulFeeds.push({ name, libraryID: this.feedIdentity(feed), itemCount: items.length, matchingItems: feedMatches });
         } catch (error) {
           if (error instanceof CancelledError) throw error;
-          refresh.failedFeeds.push({ name, message: this.safeError(error) });
+          this.recordFeedFailure(refresh, feed, error, context);
         }
       }
 
@@ -4318,25 +4786,50 @@
      * silently waiting for the next one. Stopping as soon as a round adds nothing
      * keeps the usual case at one short wait.
      */
-    async settleFeedRefresh(feeds, knownItemIDs, refresh, workflow, progress) {
+    async settleFeedRefresh(feeds, knownItemIDs, refresh, workflow, progress, context = this.createFeedRefreshContext()) {
       const candidates = [];
       const list = Array.isArray(feeds) ? feeds : [];
       if (!list.length) return candidates;
       for (let round = 1; round <= FEED_SETTLE_ROUNDS; round++) {
         this.throwIfCancelled(workflow, progress);
+        if (context.exhausted || Date.now() >= context.deadline) {
+          context.exhausted = true;
+          refresh.refreshBudgetExhausted = true;
+          break;
+        }
         progress?.update?.(
           "Waiting for Zotero to finish saving new feed articles" +
             (round > 1 ? " (check " + round + " of " + FEED_SETTLE_ROUNDS + ")" : "") + "…",
           0,
           1,
         );
-        await this.delay(FEED_SETTLE_DELAY_MS);
+        try {
+          await this.waitForFeedOperation(() => this.delay(Math.min(FEED_SETTLE_DELAY_MS,
+            Math.max(1, context.deadline - Date.now()))), {
+            workflow, progress, context, stage: "settle", timeoutMs: context.limits.dataMs,
+          });
+        } catch (error) {
+          if (error instanceof CancelledError) throw error;
+          refresh.incomplete = true;
+          if (context.exhausted) refresh.refreshBudgetExhausted = true;
+          break;
+        }
         this.throwIfCancelled(workflow, progress);
         let found = 0;
-        for (const feed of list) {
+        for (let index = 0; index < list.length; index++) {
+          const feed = list[index];
+          const key = this.feedIdentity(feed);
+          if (context.exhausted) break;
+          if (context.skippedFeeds.has(key) || context.unavailableFeeds.has(key)) continue;
           try {
-            const items = await this.Zotero.Items.getAll(feed.libraryID, true, false);
+            const items = await this.waitForFeedOperation(() => this.Zotero.Items.getAll(feed.libraryID, true, false),
+              { feed, workflow, progress, context, stage: "settle", current: index + 1, total: list.length });
+            let scanned = 0;
             for (const item of Array.isArray(items) ? items : []) {
+              if (++scanned % 32 === 0) {
+                await this.delay(0);
+                this.throwIfCancelled(workflow, progress);
+              }
               if (knownItemIDs.has(item.id)) continue;
               knownItemIDs.add(item.id);
               candidates.push(this.toCandidate(item, feed));
@@ -4346,7 +4839,7 @@
             // A library that cannot be re-read is not a reason to fail a refresh
             // that already succeeded; the items it did return are still scored.
             if (error instanceof CancelledError) throw error;
-            this.logError(new Error("FeedRank could not re-read a feed library: " + this.safeError(error)));
+            this.recordFeedFailure(refresh, feed, error, context);
           }
         }
         refresh.settleRounds = round;
@@ -4358,6 +4851,7 @@
 
     async refreshAndCollect(window, config, workflow, progress = null) {
       this.throwIfCancelled(workflow, progress);
+      const context = this.createFeedRefreshContext();
       const feeds = this.Zotero.Feeds.getAll();
       const refresh = {
         kind: "feed-refresh",
@@ -4391,52 +4885,78 @@
       for (let index = 0; index < feeds.length; index++) {
         const feed = feeds[index];
         this.throwIfCancelled(workflow, progress);
+        if (context.exhausted || Date.now() >= context.deadline) {
+          this.finishFeedBudget(refresh, feeds, index, context);
+          break;
+        }
         const name = this.Core.text(feed.name) || "Unnamed feed";
         progress?.update?.(
           "Refreshing " + name + " (" + (index + 1) + " of " + feeds.length + ")…",
           index,
           feeds.length,
         );
+        const wait = { feed, workflow, progress, context, current: index + 1, total: feeds.length };
+        if (this.pendingFeedUpdates.has(this.feedIdentity(feed))) {
+          this.recordFeedFailure(refresh, feed, new FeedRefreshError("FEED_BUSY",
+            this.t("feed.busy", { name }), "update"), context);
+          continue;
+        }
         let before;
         try {
           // Zotero's own feed scheduler waits for item data before calling the
           // per-feed updater; mirror that sequence for this manual refresh.
-          await feed.waitForDataLoad?.("item");
+          await this.waitForFeedOperation(() => feed.waitForDataLoad?.("item"), { ...wait, stage: "load" });
           this.throwIfCancelled(workflow, progress);
-          before = await this.Zotero.Items.getAll(feed.libraryID, true, false);
+          before = await this.waitForFeedOperation(() => this.Zotero.Items.getAll(feed.libraryID, true, false),
+            { ...wait, stage: "read-before" });
           this.throwIfCancelled(workflow, progress);
         } catch (error) {
           if (error instanceof CancelledError) throw error;
-          refresh.failedFeeds.push({ name, message: this.safeError(error) });
+          this.recordFeedFailure(refresh, feed, error, context);
           continue;
         }
         const beforeIDs = new Set(before.map((item) => item.id));
         for (const id of beforeIDs) knownItemIDs.add(id);
+        let updateError = null;
+        try {
+          await this.refreshFeedWithinDeadline(feed, wait);
+        } catch (error) {
+          if (error instanceof CancelledError) throw error;
+          this.recordFeedFailure(refresh, feed, error, context);
+          updateError = error;
+          if (context.exhausted || error.code === "FEED_SKIPPED" || error.code === "FEED_BUSY") continue;
+        }
         try {
           this.throwIfCancelled(workflow, progress);
-          await feed.updateFeed();
-          this.throwIfCancelled(workflow, progress);
-          const after = await this.Zotero.Items.getAll(feed.libraryID, true, false);
+          // Even a failed/timed-out update may already have saved papers. Read
+          // those within the local-data deadline; never wait for a late callback
+          // to append to a completed candidate list.
+          const after = await this.waitForFeedOperation(() => this.Zotero.Items.getAll(feed.libraryID, true, false),
+            { ...wait, stage: "read-after" });
           this.throwIfCancelled(workflow, progress);
           const created = after.filter((item) => !beforeIDs.has(item.id));
           for (const item of after) knownItemIDs.add(item.id);
-          newlyCreated.push(...created.map((item) => this.toCandidate(item, feed)));
+          for (let createdIndex = 0; createdIndex < created.length; createdIndex++) {
+            if (createdIndex % 32 === 0) {
+              await this.delay(0);
+              this.throwIfCancelled(workflow, progress);
+            }
+            newlyCreated.push(this.toCandidate(created[createdIndex], feed));
+          }
           // The settle check re-reads only the feeds that actually updated; a feed
           // whose update failed cannot be the one still saving items.
-          refreshedFeeds.push(feed);
+          if (!updateError) refreshedFeeds.push(feed);
           // Zotero can save items fetched before a later entry fails. Preserve
           // those real new items while reporting the feed itself as failed.
           if (feed.lastCheckError) {
-            refresh.failedFeeds.push({
-              name,
-              message: this.Core.text(feed.lastCheckError) || "Feed update failed",
-            });
-          } else {
-            refresh.successfulFeeds.push({ name, newItems: created.length });
+            this.recordFeedFailure(refresh, feed,
+              new Error(this.Core.text(feed.lastCheckError) || "Feed update failed"), context);
+          } else if (!updateError) {
+            refresh.successfulFeeds.push({ name, libraryID: this.feedIdentity(feed), newItems: created.length });
           }
         } catch (error) {
           if (error instanceof CancelledError) throw error;
-          refresh.failedFeeds.push({ name, message: this.safeError(error) });
+          this.recordFeedFailure(refresh, feed, error, context);
         }
       }
 
@@ -4449,6 +4969,7 @@
         refresh,
         workflow,
         progress,
+        context,
       ));
       this.throwIfCancelled(workflow, progress);
       refresh.newItemCount = newlyCreated.length;
@@ -4464,14 +4985,23 @@
       let candidates = deduplicated.candidates.slice(0, config.candidateLimit);
       refresh.limitedCount = Math.max(0, deduplicated.candidates.length - candidates.length);
 
-      if (!candidates.length) {
+      if (context.exhausted || Date.now() >= context.deadline) {
+        context.exhausted = true;
+        refresh.incomplete = true;
+        refresh.refreshBudgetExhausted = true;
+      }
+      // Once the shared budget is spent, do not immediately re-enter a scan
+      // over all feeds and relabel already-refreshed feeds as failures.
+      if (!context.exhausted && (!candidates.length || config.includePeriodBacklog === true)) {
         // A Zotero background/manual refresh can save papers just before the
         // user invokes FeedRank. New IDs can also be outside the configured
         // lookback or duplicates, leaving no eligible candidate. In either
         // case, recover only recent, currently unscored/stale feed items and
         // still require the normal user confirmation before any model call.
         progress?.update?.(
-          refresh.newItemCount
+          config.includePeriodBacklog === true
+            ? "Checking unscored stored articles in the last " + config.lookbackDays + " days…"
+            : refresh.newItemCount
             ? "No newly imported article is eligible. Checking recent stored articles…"
             : "This refresh created no new items. Checking recent stored articles…",
           feeds.length,
@@ -4482,19 +5012,31 @@
           workflow,
           null,
           progress,
+          context,
         );
         this.throwIfCancelled(workflow, progress);
-        const state = this.loadState();
-        const unscoredOrStale = fallback.candidates.filter((candidate) => {
+        for (const failure of fallback.refresh.failedFeeds || []) {
+          this.recordFeedFailure(refresh, { name: failure.name, libraryID: failure.libraryID },
+            Object.assign(new Error(failure.message), { code: failure.code, stage: failure.stage }), context);
+        }
+        if (context.exhausted) refresh.refreshBudgetExhausted = true;
+        const state = await this.loadStateAsync();
+        const unscoredOrStale = [];
+        for (let index = 0; index < fallback.candidates.length; index++) {
+          if (index % 32 === 0) {
+            await this.delay(0);
+            this.throwIfCancelled(workflow, progress);
+          }
+          const candidate = fallback.candidates[index];
           try {
             const cached = state.ranks[candidate.id];
-            return !cached || !this.matchesCurrentScore(cached, candidate, config);
+            if (!cached || !this.matchesCurrentScore(cached, candidate, config)) unscoredOrStale.push(candidate);
           } catch (_) {
             // If local cache comparison cannot be made, keep the explicit
             // candidate rather than silently hiding a recent paper.
-            return true;
+            unscoredOrStale.push(candidate);
           }
-        });
+        }
         refresh.fallbackUsed = true;
         refresh.fallbackLookbackDays = config.lookbackDays;
         refresh.fallbackScannedItemCount = fallback.refresh.scannedItemCount;
@@ -4505,10 +5047,17 @@
         );
         refresh.fallbackCandidateCount = unscoredOrStale.length;
         refresh.fallbackDuplicateCount = fallback.refresh.duplicateCount;
+        const merged = this.Core.deduplicateCandidates([
+          ...deduplicated.candidates, ...unscoredOrStale,
+        ]);
+        merged.candidates.sort((left, right) =>
+          String(right.date || "").localeCompare(String(left.date || "")) ||
+          String(left.id).localeCompare(String(right.id)));
         refresh.duplicateCount = fallback.refresh.duplicateCount;
-        candidates = unscoredOrStale.slice(0, config.candidateLimit);
-        refresh.limitedCount = Math.max(0, unscoredOrStale.length - candidates.length);
-        if (candidates.length) refresh.candidateSource = "recent-stored";
+        candidates = merged.candidates.slice(0, config.candidateLimit);
+        refresh.limitedCount = Math.max(0, merged.candidates.length - candidates.length);
+        if (candidates.length) refresh.candidateSource = config.includePeriodBacklog
+          ? "period-unscored" : "recent-stored";
       }
       progress?.update?.(
         candidates.length
@@ -4801,7 +5350,7 @@
         }), { window });
         this.throwIfCancelled(workflow, progress);
 
-        const state = this.loadState();
+        const state = await this.loadStateAsync();
         const cacheHits = [];
         const toRank = [];
         // A rescore replaces stored records; a normal score never does. In "score"
@@ -4815,7 +5364,12 @@
         const significanceRefresh = this.arxivSignificanceToRecompute(candidates, {
           rescore: rescoreArxivSignificance,
         });
+        let checkedCandidates = 0;
         for (const candidate of candidates) {
+          if (++checkedCandidates % 32 === 0) {
+            await this.delay(0);
+            this.throwIfCancelled(workflow, progress);
+          }
           const fingerprint = this.Core.cacheFingerprint(candidate, config);
           const cached = state.ranks[candidate.id];
           const needsFreshSignificance = significanceRefresh.has(this.Core.text(candidate?.id));
@@ -4847,7 +5401,7 @@
           const completedRecords = this.Core.sortRankings(cacheHits);
           // The digest is the WEEK's eligible scores, not this run's candidate list,
           // so the argument here is the run and the window -- not the records.
-          await this.recordCompletedDigest(digestRun, window);
+          await this.recordCompletedDigest(digestRun, window, { workflow, progress });
           if (showResults !== false) {
             this.openResults(window, completedRecords, {
               refresh,
@@ -4897,7 +5451,7 @@
           latestState.lastUsageTotal = this.Core.aggregateUsage(usageCalls);
           latestState.lastUsageCallCount = usageCalls.length;
           return latestState;
-        });
+        }, { returnState: false, beforeCommit: () => this.throwIfCancelled(workflow, progress) });
         this.refreshRankColumn();
         // Item-pane rendering is a convenience UI enhancement. Its failure
         // must never turn a successfully cached feed run into a reported
@@ -4920,7 +5474,7 @@
         const completedRecords = this.Core.sortRankings([...cacheHits, ...records]);
         // Scoring is committed; the digest is rebuilt from the week's eligible scores
         // and then sent, which is the order the reader asked for.
-        await this.recordCompletedDigest(digestRun, window);
+        await this.recordCompletedDigest(digestRun, window, { workflow, progress });
         if (showResults !== false) {
           this.openResults(window, completedRecords, {
             refresh,
@@ -4942,7 +5496,9 @@
         }
         throw error;
       } finally {
-        this.endWorkflowProgress(workflow, progress);
+        // An adopted window belongs to the surrounding refresh/email workflow,
+        // which can still have digest preparation and SMTP work left to do.
+        if (!adoptedProgress) this.endWorkflowProgress(workflow, progress);
       }
     }
 
@@ -5363,6 +5919,10 @@
     createProgress(window, title) {
       const controller = {
         cancelled: false,
+        completed: false,
+        skipFeedHandler: null,
+        skipAllowedAt: 0,
+        skipEnableTimer: null,
         currentXHR: null,
         dialog: null,
         lastUsage: "",
@@ -5370,13 +5930,43 @@
         current: 0,
         total: 1,
         cancel: () => {
+          if (controller.completed || controller.cancelled) return;
           controller.cancelled = true;
+          controller.setSkipCurrentFeed(null);
           try {
             controller.currentXHR?.abort?.();
           } catch (_) {
             // The provider may already have settled the request.
           }
           controller.update("Cancel requested…", 0, 1);
+        },
+        setSkipCurrentFeed: (handler) => {
+          clearTimeout(controller.skipEnableTimer);
+          controller.skipEnableTimer = null;
+          controller.skipFeedHandler = !controller.completed && !controller.cancelled && typeof handler === "function"
+            ? handler : null;
+          const replay = () => {
+            try { controller.dialog?.FeedRankerProgress?.setCanSkip?.(controller.canSkipCurrentFeed()); } catch (_) {}
+          };
+          replay();
+          if (controller.skipFeedHandler && Date.now() < controller.skipAllowedAt) {
+            controller.skipEnableTimer = setTimeout(() => {
+              controller.skipEnableTimer = null;
+              replay();
+            }, controller.skipAllowedAt - Date.now());
+          }
+        },
+        canSkipCurrentFeed: () => !controller.completed && !controller.cancelled &&
+          Boolean(controller.skipFeedHandler) && Date.now() >= controller.skipAllowedAt,
+        skipCurrentFeed: () => {
+          if (!controller.canSkipCurrentFeed()) return false;
+          const handler = controller.skipFeedHandler;
+          // Disable synchronously and debounce across event-loop turns too:
+          // the next feed can already be active by the second double-click.
+          controller.skipAllowedAt = Date.now() + 600;
+          controller.setSkipCurrentFeed(null);
+          handler();
+          return true;
         },
         attachXHR: (xhr) => {
           controller.currentXHR = xhr || null;
@@ -5418,6 +6008,10 @@
           }
         },
         close: () => {
+          if (controller.completed) return;
+          // Mark completion BEFORE close triggers the dialog's unload event.
+          controller.completed = true;
+          controller.setSkipCurrentFeed(null);
           try {
             if (controller.dialog && !controller.dialog.closed) controller.dialog.close();
           } catch (_) {}
@@ -5426,6 +6020,11 @@
       const args = {
         title,
         cancel: controller.cancel,
+        isComplete: () => controller.completed,
+        skipCurrentFeed: controller.skipCurrentFeed,
+        canSkipCurrentFeed: controller.canSkipCurrentFeed,
+        skipLabel: this.t("progress.skipFeed"),
+        cancelLabel: this.t("progress.cancel"),
         lastUsage: "",
         initialMessage: controller.lastMessage,
         initialCurrent: controller.current,
@@ -5437,19 +6036,24 @@
         // Dependent, like every other FeedRank window: a run refreshes the item tree
         // and the item pane, and Zotero raising its own window must not bury the
         // progress (and its Cancel button) behind it.
-        "chrome,dialog=no,dependent=yes,resizable,centerscreen,width=470,height=180",
+        "chrome,dialog=no,dependent=yes,resizable,centerscreen,width=520,height=220",
         args,
       );
       controller.dialog = dialog;
       try {
         dialog?.addEventListener?.("load", () => {
           try {
+            if (controller.completed) {
+              if (!dialog.closed) dialog.close();
+              return;
+            }
             dialog.FeedRankerProgress?.update?.(
               controller.lastMessage,
               controller.current,
               controller.total,
             );
             dialog.FeedRankerProgress?.setUsage?.(controller.lastUsage);
+            dialog.FeedRankerProgress?.setCanSkip?.(controller.canSkipCurrentFeed());
             if (controller.title) dialog.FeedRankerProgress?.setTitle?.(controller.title);
           } catch (_) {}
         }, { once: true });
@@ -5694,7 +6298,7 @@
 
     async sendDigest(window, records, summary) {
       // The service intentionally maps this to the same preview-first flow;
-      // a separate confirmation in the preview is required before its POST.
+      // a separate Send click in the preview is required before SMTP submission.
       return this.invokeEmailDigest(window, "sendDigest", records, summary);
     }
 
@@ -5725,8 +6329,10 @@
      * dropped too.
      */
     weeklyDigestRecords() {
-      const config = this.loadConfig();
-      const state = this.loadState();
+      return this.drainStateSteps(this.weeklyDigestRecordsSteps(this.loadState()));
+    }
+
+    *weeklyDigestRecordsSteps(state, config = this.loadConfig()) {
       // The digest's span follows the cadence, so a daily schedule digests one day and
       // a monthly one digests thirty.
       const lookbackDays = scheduledLookbackDays(config.runFrequency);
@@ -5736,14 +6342,20 @@
       // Counted BEFORE the freshness filter, so "nothing was scored in this period" and
       // "what was scored no longer matches your settings" stay distinguishable.
       // They need different instructions, and one message for both was confusing.
-      const scoredInWindow = Object.values(asObject(state.ranks))
-        .filter((record) => record && Number.isFinite(Number(record.score)))
-        .filter((record) => this.Core.withinLookback(record.date, lookbackDays));
-      const current = scoredInWindow.filter((record) => this.isCurrentScoreRecord(record, config));
-      const records = this.Core.sortRankings(
-        current.map((record) => this.withLocalPriority(record, config)).filter(Boolean),
-      );
-      return { records, scoredInWindow: scoredInWindow.length, lookbackDays, config, error: "" };
+      let scoredInWindow = 0;
+      const current = [];
+      for (const record of Object.values(asObject(state.ranks))) {
+        if (record && Number.isFinite(Number(record.score)) && this.Core.withinLookback(record.date, lookbackDays)) {
+          scoredInWindow++;
+          if (this.isCurrentScoreRecord(record, config)) {
+            const local = this.withLocalPriority(record, config);
+            if (local) current.push(local);
+          }
+        }
+        yield;
+      }
+      const records = this.Core.sortRankings(current);
+      return { records, scoredInWindow, lookbackDays, config, error: "" };
     }
 
     /*
@@ -5755,8 +6367,21 @@
      * drift between them.
      */
     weeklyDigestSelection() {
+      return this.digestSelectionFromRecords(this.weeklyDigestRecords());
+    }
+
+    async weeklyDigestSelectionAsync() {
+      if (this.weeklyDigestSelection !== FeedRankerService.prototype.weeklyDigestSelection) {
+        return this.weeklyDigestSelection();
+      }
+      const result = this.weeklyDigestRecords !== FeedRankerService.prototype.weeklyDigestRecords
+        ? this.weeklyDigestRecords()
+        : await this.drainStateStepsAsync(this.weeklyDigestRecordsSteps(await this.loadStateAsync()));
+      return this.digestSelectionFromRecords(result);
+    }
+
+    digestSelectionFromRecords({ records, scoredInWindow, lookbackDays, config, error }) {
       const email = this.Zotero.FeedRankEmail;
-      const { records, scoredInWindow, lookbackDays, config, error } = this.weeklyDigestRecords();
       const span = lookbackDays === 1 ? "the last day" : "the last " + lookbackDays + " days";
       if (error) return { records: [], reason: error };
       if (!records.length) {
@@ -5804,9 +6429,12 @@
       if (!email || typeof email.rebuildDigest !== "function") {
         return { available: false, reason: "FeedRank email is still starting; reopen this pane in a moment." };
       }
-      const selection = this.weeklyDigestSelection();
-      if (!selection.records.length) return { available: false, reason: selection.reason };
+      const selection = await this.weeklyDigestSelectionAsync();
       try {
+        if (!selection.records.length) {
+          await email.invalidateSnapshot?.(selection.reason);
+          return { available: false, reason: selection.reason };
+        }
         // Content-derived, so the same week's articles always produce the same
         // digest identity rather than a new one on every rebuild. The service
         // bounds and hashes whatever it is given.
@@ -5877,6 +6505,9 @@
         : "";
       const message = [
         "Refreshed " + successes + " feed" + (successes === 1 ? "" : "s") + ".",
+        refresh.incomplete ? this.t("feed.incomplete", {
+          timeouts: refresh.timeoutCount || 0, skipped: refresh.skippedFeedCount || 0,
+        }) : "",
         failures ? failures + " feed refresh failure" + (failures === 1 ? "" : "s") + "." : "",
         refresh.newItemCount
           ? refresh.newItemCount + " new item" + (refresh.newItemCount === 1 ? "" : "s") + " found."

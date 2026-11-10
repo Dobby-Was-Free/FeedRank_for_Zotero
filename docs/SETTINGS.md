@@ -45,7 +45,7 @@ and a file that cannot be read changes nothing at all.
 | **Papers per Awesome GPT call** (1–50) | How many papers one request carries. Fewer, larger calls are much faster than many small ones. |
 | **Requests at once** (1–3) | Overlaps the waiting between batch calls. 1 sends them one at a time. It changes dispatch only, never the prompt or the cache fingerprint. |
 | **Retries per batch** (0–3) | How many times a failed call is retried, with the same bytes, before the batch is reported as failed. |
-| **Request timeout (ms)** | How long one call may take before it is treated as failed. |
+| **Model request timeout (ms)** | How long one Awesome GPT call may take before it is treated as failed. This does not control RSS refresh. |
 | **Currency code** | The currency the optional prices are entered in. |
 | **Input price per 1M tokens** / **Output price per 1M tokens** | Optional rates. Without prices the cost is reported as unavailable, never as zero. |
 | **Maximum significance added to total score (0–10 points)** | The shared local maximum added on top of the relevance Score. It is fed by a journal impact factor, or by the arXiv significance value, or — when the journal lookup finds nothing — by the model's own estimate of the venue. 0 disables it. |
@@ -53,6 +53,41 @@ and a file that cannot be read changes nothing at all.
 | **Enable EasyScholar journal lookup** | Turns the journal lookup on. Nothing is sent anywhere until this is on and a key is saved. |
 | **Re-read journal data before scoring** | Optional. A cached journal costs no request, and a failure never blocks scoring. |
 | **EasyScholar secret key** | Stored in an isolated encrypted Login Manager entry, never in a preference. A resolved journal is reused with no expiry, because its metrics do not change. |
+
+### RSS refresh limits and skipping (0.3.2)
+
+RSS does not impose a universal connection timeout. Publishers can rate-limit
+requests and choose how much recent history their feeds expose. Those limits
+are separate from the publication-date filter and the model request timeout.
+
+FeedRank uses Zotero's native feed updater, with its own bounded waits:
+
+- Each native RSS update: **90 seconds**, including fetch, parsing and saving.
+- Each feed-data or stored-item read: **15 seconds**.
+- The RSS refresh/settle/backlog phase: **five minutes overall**. Model scoring
+  and SMTP delivery have their own existing limits; this is not a five-minute
+  limit on the entire scoring/email workflow.
+
+Progress shows the feed, phase, elapsed/allowed time, feed position and remaining
+feeds. **Skip current feed** appears beside Cancel during a feed wait. It skips
+that feed for this run, including its fallback and settle scans, while other
+feeds continue. Cancel stops the whole FeedRank workflow.
+
+A timed-out or skipped native update can still finish inside Zotero later:
+Zotero 10.0.8 has no public per-feed abort API. FeedRank observes its eventual
+completion and prevents a duplicate update while its earlier call remains
+pending. It does not alter Zotero's global scheduler or private update state.
+Timers also cannot preempt synchronous native parsing or repair a stuck Zotero
+database transaction. Restart Zotero after installing this release to clear an
+already stuck native job.
+
+Failures/timeouts/skips are named in **Check schedule**, and summaries say when
+the refresh is incomplete. Available papers and existing scores are retained.
+Automatic sending still requires the existing approval setting; manual
+**Refresh & email…** still opens a preview and requires explicit Send. A late
+native completion does not start another scoring/email workflow. Use the
+manual action to collect papers saved later without automatically resending a
+digest from the same scheduled period.
 
 ### Score and Priority
 
@@ -78,6 +113,43 @@ labelled as one wherever it is shown.
 | **Send the weekly digest automatically** | The standing approval for the scheduled send. See below. |
 | **Rebuild digest** | Recreates this period's digest from the scores already in Zotero. Sends nothing. See below. |
 | **Review digest** | Opens that exact message; sending it there is the confirmation. |
+| **Refresh & email…** | Refreshes, fills missing/stale scores for the selected period, then opens a preview. Sends nothing until you click Send. |
+
+### Manual refresh and email (0.3.1)
+
+1. Save the scoring settings and digest settings first. **Repeat** determines the
+   email window: Daily = 1 day, Weekly = 7 days, Monthly = 30 days. Ordinary
+   **Refresh and score** uses **Lookback days** instead and does not send email.
+2. Keep your existing saved SMTP settings. **Test connection** authenticates over
+   verified TLS but sends no message. It is separate from sending a digest.
+3. Click **Refresh & email…** in the Email digest settings or the Tools menu.
+   A progress window shows refresh/scoring work and the articles remaining. This
+   checks stored unscored/stale articles even if refresh also imported new ones;
+   the configured per-refresh candidate cap still limits model work. Current
+   scores are reused, and formatting/preview never calls the model.
+4. Review the exact sender, recipient, server, subject, HTML and plain text. Use
+   **Send** in that window to confirm submission. This works with automatic
+   sending off and does not mark the scheduled period as served. If credentials
+   are unavailable, the body remains reviewable but Send is disabled.
+5. Inspect **Last email**. SMTP server acceptance is not proof of inbox delivery;
+   also check the recipient's spam/junk folder. If an earlier submission was
+   accepted or has an uncertain outcome, the unchanged digest cannot be sent
+   again through this button. Check the mailbox before considering a manual retry.
+
+The paper counts are limits, not guarantees: the relevance threshold and number
+of available current scores may produce fewer articles. **Priority-paper count**
+and **Optional reading-list count** both fit within **Maximum papers**. Rebuilding
+an email from cached scores is free; refreshing may score missing articles and
+incur normal model costs.
+
+Version 0.3.1 fixes the old 60,000-character combined digest limit, which rejected
+ordinary larger reading lists. It retains finite bounds (512 Ki characters of
+serialized HTML/plain-text digest, a 2 Mi-character ASCII MIME ceiling, and
+12 Mi characters of email state) and saves email state in small integrity-checked
+preference shards. No titles or articles are silently dropped to fit the old
+limit. A failed/empty current digest displays its reason instead of an old preview;
+frozen submission history and uncertain outcomes are retained. Repeated pane
+refreshes do not rewrite an unchanged snapshot.
 
 ### The scheduled run
 
@@ -96,7 +168,7 @@ rather than skipped.
 **Nothing is refreshed because Zotero started.** The automatic run happens at the time you
 set, while Zotero is open, and at no other moment. A blank time means there is no automatic
 run at all, and you drive the work from the **Tools → FeedRank for Zotero** commands
-instead — **Send weekly digest** performs the whole job on demand.
+instead — **Refresh & email…** performs the whole job on demand, ending at a preview.
 
 **Run time** is a local `HH:MM`. `08:00`, `8:05`, `1:30pm` all parse.
 
@@ -105,7 +177,10 @@ repeat, the rest of the month): a machine that was asleep at 16:50 still runs wh
 at 17:30, and a period that went by with Zotero closed is left alone rather than caught up
 at the next launch. That is also why the setting polls rather than setting one alarm — a
 single long timer would not survive suspend, resume, or a clock change — and why a run
-cannot repeat: the period it belongs to is recorded when it succeeds. Changing the repeat,
+cannot repeat: after scoring completes, the period is recorded before any email
+attempt. Scoring failures/cancellation can retry on the next check; email failures,
+rejections and uncertain outcomes require manual review, not an automatic resend.
+Changing the repeat,
 the day, or the time starts a new period, so a schedule you have just set can be tested
 without waiting for the next one.
 
@@ -125,7 +200,8 @@ the same work on demand.
 1. Wait for Zotero and Awesome GPT to be ready.
 2. Refresh every Zotero feed, one after another.
 3. **Wait for Zotero to finish saving** what it just fetched — see below.
-4. Score the week's articles that do not already have a current score.
+4. Check the entire cadence's period for unscored/stale articles (including stored
+   backlog when new articles arrived), and score up to the configured candidate cap.
 5. Prepare the digest, and email it if the standing approval is on.
 
 **Step 3 exists because a refresh can finish before Zotero has finished saving.**
@@ -138,15 +214,15 @@ Without it, an article saved a second after the refresh was not in that run and 
 the digest, and nothing said it had been missed.
 
 Step 5 sends even when step 4 scored nothing new: the digest is a digest of the last
-seven days of scores, so a quiet week still gets its email.
+cadence's period of scores, so a quiet period can still get its email.
 
 ### Scheduled delivery
 
 **Send the weekly digest automatically** is the whole approval. A checked setting
 is a standing decision, so the scheduled run submits the digest without a dialog;
 the run states which server and recipient it covered through a passive notice in
-the corner — and, from 0.2.9, the window that closes the run states the delivery
-outcome itself (`Email: SENT to …`, or `Email: NOT SENT — <reason>`). Clearing this
+the corner. The end-of-run notice and durable schedule log state the delivery
+outcome (`Email: SENT to …`, meaning server acceptance, or `Email: NOT SENT — <reason>`). Clearing this
 box stops it. A checked box alone is never enough:
 credentials must be configured, and the digest is still snapshotted and frozen
 before exactly one connection is opened.
@@ -175,7 +251,7 @@ flight.
 
 ### Where the digest comes from, and why it can be empty
 
-The digest is built from the **scored articles of the last seven days**, however
+The digest is built from the **scored articles of the selected 1/7/30-day period**, however
 they were scored — a scheduled run, **Refresh and score**, **Score last N days**,
 or **Score selected items**. Opening the pane rebuilds it from the cache, so scoring
 papers by hand is enough to make a digest appear. Building one writes a local

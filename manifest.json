@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "FeedRank for Zotero",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Your research feeds, ranked by relevance.",
   "author": "Local companion plugin",
   "icons": {

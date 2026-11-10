@@ -151,14 +151,16 @@ test("the shipped package carries no personal data", () => {
     { pattern: /\b\d{2}[a-z0-9]{5}\.default\b/i, what: "a local Zotero profile directory" },
     { pattern: /CV-?QKD|PPLN|squeezed and entangled/i, what: "a personal research profile" },
   ];
-  // Tests, documentation and tools are published too: an identifier in a fixture is as public as
-  // one in the runtime. The scan walks the whole tree rather than a hand-kept list, which is how
-  // context in test files escaped it before.
+  // Tests, documentation and tools are published too. Walk the release source
+  // roots and their public support code, not unrelated local task files, private
+  // library exports or connector scripts in a shared workspace root.
   const skipDirectories = new Set([".git", "node_modules", "dist", "private"]);
   const walk = (dir) => {
     const found = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (skipDirectories.has(entry.name)) continue;
+      // Local private archives are not release inputs. The XPI builder has an
+      // explicit allowlist; never scan a user's settings backup as public code.
+      if (skipDirectories.has(entry.name) || (entry.isDirectory() && entry.name.endsWith("-private"))) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { found.push(...walk(full)); continue; }
       // The file that defines the patterns contains them as text, so it cannot be scanned by them.
@@ -167,7 +169,10 @@ test("the shipped package carries no personal data", () => {
     }
     return found;
   };
-  for (const full of walk(ROOT)) {
+  const publicFiles = ["bootstrap.js", "manifest.json", "package.json", "updates.json", "README.md"]
+    .map((rel) => path.join(ROOT, rel));
+  for (const rel of ["chrome", "locale", "docs", "tests", "tools"]) publicFiles.push(...walk(path.join(ROOT, rel)));
+  for (const full of publicFiles) {
     const rel = path.relative(ROOT, full).replace(/\\/g, "/");
     const source = fs.readFileSync(full, "utf8");
     for (const { pattern, what } of forbidden) {

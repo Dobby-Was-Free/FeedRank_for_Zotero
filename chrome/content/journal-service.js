@@ -141,7 +141,8 @@
       this.clock = typeof clock === "function" ? clock : () => Date.now();
       this.State = State || {
         load: () => this.Zotero.FeedRanker?.loadState?.(),
-        mutate: (mutator) => this.Zotero.FeedRanker?.mutateState?.(mutator),
+        loadJournalCache: () => this.Zotero.FeedRanker?.loadJournalCache?.(),
+        mutate: (mutator) => this.Zotero.FeedRanker?.mutateState?.(mutator, { returnState: false }),
       };
       this.sessionSecretKey = "";
       this.lookupInProgress = false;
@@ -398,6 +399,10 @@
 
     readCache() {
       try {
+        if (typeof this.State?.loadJournalCache === "function") {
+          const cache = this.State.loadJournalCache();
+          if (cache != null) return asObject(cache);
+        }
         return asObject(this.State?.load?.()?.journalCache);
       } catch (_) {
         return {};

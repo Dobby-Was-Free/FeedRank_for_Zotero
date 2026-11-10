@@ -97,4 +97,9 @@ machine; on another machine, re-enter the password and the key.
   profile directory, or personal-research wording.
 - Icon metadata is stripped (`logo_small.png` carried XMP editing history); pixels are verified
   byte-identical after stripping.
-- `private/` holds development history and is excluded by `.gitignore`.
+- `private/` holds development history and detailed local test reports and is
+  excluded by `.gitignore`. Local connector/library exports and private archive
+  folders are also ignored; they are not public source or XPI inputs.
+- Moving a tracked document into `private/` also requires staging the deletion
+  of its old public path. Ignore rules do not remove previously tracked content
+  or erase earlier Git history.

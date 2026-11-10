@@ -268,7 +268,7 @@
         <html:input id="feed-ranker-retries" type="number" min="0" max="3"/>
       </html:div>
 
-      <html:label for="feed-ranker-timeout">Request timeout (ms)</html:label>
+      <html:label for="feed-ranker-timeout">Model request timeout (ms)</html:label>
       <html:div class="feed-ranker-ctl">
         <html:input id="feed-ranker-timeout" type="number" min="15000" max="300000" step="1000"/>
       </html:div>
@@ -440,8 +440,10 @@
         <html:span class="feed-ranker-action-label" data-i18n="pane.preferences.schedule">Schedule</html:span>
         <button id="feed-ranker-email-save-options" label="Save digest settings"/>
         <button id="feed-ranker-weekly-check" label="Check schedule"/>
+        <button id="feed-ranker-refresh-email" label="Refresh &amp; email…"/>
       </html:div>
       <html:div class="feed-ranker-hint">Check schedule reports whether the timer is armed, when the next run is due, and what the last one did.</html:div>
+      <html:div class="feed-ranker-hint" data-i18n="pane.refreshEmailHint">Save settings first; this checks the last 1/7/30 days and opens a preview. Nothing is sent until you click Send.</html:div>
     </html:div>
   </groupbox>
 

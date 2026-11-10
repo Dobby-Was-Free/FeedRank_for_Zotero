@@ -615,6 +615,199 @@ test("both panes offer the repeat, and only the day control it uses", () => {
 // The results window
 // ---------------------------------------------------------------------------
 
+test("large Unicode email state migrates from inline storage into bounded exact shards", async () => {
+  const { service, prefStore } = createHarness();
+  const Zotero = service.Zotero;
+  const message = "原始冻结内容 & \"quoted\" \\ newline\r\n".repeat(18000);
+  const legacy = { schema: 3, ranks: {}, lastCandidates: [],
+    emailDelivery: { currentRun: { digest: { html: message, text: message } } },
+    emailSubmissions: { retained: { message, status: "unknown" } } };
+  Zotero.Prefs.set("feedranker.state", JSON.stringify(legacy));
+  assert.equal(service.loadState().emailSubmissions.retained.message, message);
+  await service.mutateState((state) => { state.weeklyPromptWeek = "2026-10-05"; });
+  const saved = service.loadState();
+  assert.equal(saved.stateIntegrityError, "");
+  assert.deepEqual(saved.emailDelivery, legacy.emailDelivery);
+  assert.deepEqual(saved.emailSubmissions, legacy.emailSubmissions);
+  assert.ok(saved.stateStorage.email.count > 1);
+  for (const [key, value] of prefStore) {
+    assert.ok(Buffer.byteLength(value, "utf8") <= 128 * 1024, "bounded preference: " + key);
+  }
+  const primary = JSON.parse(Zotero.Prefs.get("feedranker.state"));
+  assert.deepEqual(primary.emailDelivery, {});
+  assert.deepEqual(primary.emailSubmissions, {});
+  assert.ok(!JSON.stringify(primary).includes(message.slice(0, 100)));
+});
+
+test("a failed email shard write preserves the old snapshot and missing shards block mutation", async () => {
+  const { service } = createHarness();
+  const Zotero = service.Zotero;
+  await service.mutateState((state) => {
+    state.emailDelivery = { exact: "previous digest" };
+    state.emailSubmissions = { frozen: { message: "original wire bytes", status: "unknown" } };
+  });
+  const previous = service.loadState();
+  const primary = Zotero.Prefs.get("feedranker.state");
+  const set = Zotero.Prefs.set;
+  Zotero.Prefs.set = (key, value) => {
+    if (key.includes(".email.")) throw new Error("mock email shard write failure");
+    return set(key, value);
+  };
+  await assert.rejects(service.mutateState((state) => {
+    state.emailDelivery = { exact: "new digest".repeat(30000) };
+  }), /shard write failure/);
+  assert.equal(Zotero.Prefs.get("feedranker.state"), primary);
+  assert.deepEqual(service.loadState().emailSubmissions, previous.emailSubmissions);
+  Zotero.Prefs.set = set;
+  Zotero.Prefs.clear(service.stateShardKey(previous.stateStorage.generation, "email", 0));
+  assert.match(service.loadState().stateIntegrityError, /integrity/);
+  await assert.rejects(service.mutateState(() => {}), /integrity/);
+  assert.equal(Zotero.Prefs.get("feedranker.state"), primary);
+});
+
+test("manual refresh and email uses the cadence, reuses scores and previews with auto on or off", async () => {
+  for (const automaticSendingEnabled of [false, true]) {
+    for (const withNewItems of [false, true]) {
+      const { service, mainWindow } = createHarness();
+      const Zotero = service.Zotero;
+      service.saveConfig({ runFrequency: "weekly", lookbackDays: 1, candidateLimit: 500 });
+      await service.stateMutationQueue;
+      await service.mutateState((state) => { state.weeklyPromptWeek = "already-served"; });
+      let previews = 0, modelWaits = 0, scoringRuns = 0, buildCount = 0;
+      const records = Array.from({ length: 12 }, (_, index) => ({ id: String(index), score: 90 }));
+      Zotero.FeedRankEmail = {
+        loadConfig: () => ({ automaticSendingEnabled }),
+        rebuildDigest: async (input) => {
+          assert.equal(input.records.length, 12, "all eligible period scores, not only new items");
+          buildCount++;
+          return { snapshot: { recordCount: 12 } };
+        },
+        openPreview: async ({ parentWindow }) => {
+          assert.equal(parentWindow, mainWindow); previews++; return { available: true };
+        },
+        recordCompletedWeeklyRun: () => { throw new Error("manual action must never auto-submit"); },
+      };
+      service.confirmWeeklyEmailDelivery = () => { throw new Error("manual preview needs no auto approval"); };
+      service.weeklyDigestSelection = () => ({ records, localDay: "2026-10-05",
+        window: { from: "2026-09-29", to: "2026-10-05" } });
+      service.createProgress = () => ({ cancelled: false, update() {}, setTitle() {}, close() {} });
+      service.refreshAndCollect = async (_window, config) => {
+        assert.equal(config.lookbackDays, 7);
+        assert.equal(config.includePeriodBacklog, true);
+        assert.equal(config.candidateLimit, 500);
+        return { candidates: withNewItems ? [
+          { id: "1:NEW1", itemID: 1, libraryID: 1 },
+          { id: "1:NEW2", itemID: 2, libraryID: 1 },
+        ] : [], refresh: {} };
+      };
+      service.waitForAwesomeGPT = async () => { modelWaits++; };
+      service.rankAndDisplay = async (_window, candidates, options) => {
+        scoringRuns++; assert.equal(candidates.length, 2);
+        assert.equal(options.digestRun, undefined, "scoring must not trigger automatic email");
+      };
+      const outcome = await service.runRefreshAndEmail(mainWindow);
+      assert.equal(outcome.previewReady, true, outcome.reason);
+      assert.equal(previews, 1);
+      assert.equal(buildCount, 1);
+      assert.equal(modelWaits, withNewItems ? 1 : 0, "cached-only digest requires no LLM bridge");
+      assert.equal(scoringRuns, withNewItems ? 1 : 0);
+      assert.equal(service.loadState().weeklyPromptWeek, "already-served", "manual testing does not consume the schedule");
+      assert.equal(service.activeRun, null);
+    }
+  }
+});
+
+test("repeated refresh-email clicks share one operation, and empty results send nothing", async () => {
+  const { service, mainWindow } = createHarness();
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  let refreshes = 0, previews = 0;
+  service.createProgress = () => ({ cancelled: false, update() {}, close() {} });
+  service.refreshAndCollect = async () => { refreshes++; await barrier; return { candidates: [], refresh: {} }; };
+  service.rebuildWeeklyDigest = async () => ({ available: false, reason: "No eligible articles" });
+  service.Zotero.FeedRankEmail.openPreview = async () => { previews++; };
+  const first = service.runRefreshAndEmail(mainWindow);
+  assert.equal(await service.runRefreshAndEmail(mainWindow), undefined);
+  assert.equal(refreshes, 1);
+  release();
+  const result = await first;
+  assert.equal(result.previewReady, false);
+  assert.match(result.reason, /No eligible/);
+  assert.equal(previews, 0);
+  assert.equal(service.loadState().weeklyPromptWeek, "");
+});
+
+test("scheduled scoring failure retries, but an uncertain SMTP attempt consumes the period once", async () => {
+  const { service, mainWindow, logErrors } = createHarness();
+  const Zotero = service.Zotero;
+  service.saveConfig({ runFrequency: "daily", weeklyRunTime: "09:00" });
+  await service.stateMutationQueue;
+  const now = new Date(2026, 9, 5, 9, 30);
+  service.createProgress = () => ({ cancelled: false, update() {}, setTitle() {}, close() {} });
+  service.waitForAwesomeGPT = async () => {};
+  service.refreshAndCollect = async (_window, config) => {
+    assert.equal(config.includePeriodBacklog, true);
+    return { candidates: [{ id: "1:NEW1", itemID: 1, libraryID: 1 }], refresh: {} };
+  };
+  service.confirmWeeklyEmailDelivery = async () => ({ approved: true });
+  service.weeklyDigestSelection = () => ({ records: [{ id: "score-1", score: 90 }],
+    localDay: "2026-10-05", window: { from: "2026-10-05", to: "2026-10-05" } });
+  let scoreAttempts = 0, emailAttempts = 0;
+  Zotero.FeedRankEmail.recordCompletedWeeklyRun = async () => {
+    emailAttempts++;
+    assert.equal(service.loadState().weeklyPromptWeek, "2026-10-05", "marker commits before SMTP can open");
+    return { recorded: true, autoResult: { sent: false, status: "unknown", message: "mock uncertain SMTP outcome" } };
+  };
+  service.rankAndDisplay = async (_window, _candidates, options) => {
+    scoreAttempts++;
+    assert.equal(service.loadState().weeklyPromptWeek, "", "refresh cannot claim successful scoring");
+    if (scoreAttempts === 1) throw new Error("mock model failure");
+    await service.recordCompletedDigest(options.digestRun, mainWindow);
+  };
+  await service.runWeeklyIfDue(now);
+  assert.equal(service.loadState().weeklyPromptWeek, "");
+  assert.equal(emailAttempts, 0);
+  await service.runWeeklyIfDue(now);
+  assert.equal(service.loadState().weeklyPromptWeek, "2026-10-05", logErrors.join("\n"));
+  await service.runWeeklyIfDue(now);
+  assert.equal(scoreAttempts, 2);
+  assert.equal(emailAttempts, 1);
+  await service.stateMutationQueue;
+  assert.match(service.loadState().weeklyLog.join("\n"), /uncertain SMTP/);
+});
+
+test("both settings panes restore a preview-first refresh-email action", () => {
+  const root = path.join(__dirname, "..");
+  for (const [pane, script, id] of [
+    ["preferences.xhtml", "preferences.js", "feed-ranker-refresh-email"],
+    ["settings.xhtml", "settings.js", "refresh-email"],
+  ]) {
+    const markup = fs.readFileSync(path.join(root, "chrome/content", pane), "utf8");
+    const code = fs.readFileSync(path.join(root, "chrome/content", script), "utf8");
+    assert.ok(markup.includes('id="' + id + '"'));
+    assert.match(code, /runRefreshAndEmail/);
+    assert.match(code, /button\.disabled = true/);
+  }
+});
+
+test("cancelling scheduled scoring leaves the period unclaimed and opens no email flow", async () => {
+  const { service } = createHarness();
+  service.createProgress = () => ({ cancelled: false, update() {}, setTitle() {}, close() {} });
+  service.waitForAwesomeGPT = async () => {};
+  service.refreshAndCollect = async () => ({
+    candidates: [{ id: "1:NEW1", itemID: 1, libraryID: 1 }], refresh: {},
+  });
+  service.confirmWeeklyEmailDelivery = async () => ({ approved: false });
+  service.rankAndDisplay = async (_window, _candidates, options) => {
+    options.workflow.cancel(); service.throwIfCancelled(options.workflow);
+  };
+  service.recordCompletedDigest = () => { throw new Error("cancelled scoring must never reach email"); };
+  await service.runWeekly(new Date(2026, 9, 5, 12, 30));
+  assert.equal(service.loadState().weeklyPromptWeek, "");
+  assert.equal(service.weeklyStarted, false);
+  assert.equal(service.activeRun, null);
+});
+
 test("a run that is not allowed to show results opens no results window", async () => {
   const harness = createHarness();
   const { service } = harness;
@@ -721,6 +914,8 @@ test("the settings pane is told when the next run is, not just that it saved", a
   assert.match(done, /Next automatic run:/);
 
   // ...and the one-line pane flag says it too, instead of only naming the last week.
+  // Unlike nextRunSummary above, the pane uses the real current date.
+  await service.mutateState((state) => { state.weeklyPromptWeek = service.currentRunAnchor(new Date()); });
   assert.match(service.runStateSummary(), /already done this week|already done/);
 });
 

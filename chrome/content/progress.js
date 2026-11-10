@@ -7,6 +7,9 @@ window.addEventListener("load", () => {
   const usage = document.getElementById("usage");
   const progress = document.getElementById("progress");
   const cancel = document.getElementById("cancel");
+  const skip = document.getElementById("skip-current");
+  if (args.cancelLabel) cancel.textContent = String(args.cancelLabel);
+  if (skip && args.skipLabel) skip.textContent = String(args.skipLabel);
   let cancelled = false;
 
   const update = (nextMessage, current = 0, total = 1) => {
@@ -22,10 +25,19 @@ window.addEventListener("load", () => {
   const setTitle = (nextTitle) => {
     document.title = String(nextTitle || "") || "FeedRank for Zotero";
   };
+  const setCanSkip = (enabled) => {
+    if (!skip) return;
+    const active = Boolean(enabled) && !cancelled && !args.isComplete?.();
+    skip.disabled = !active;
+    skip.hidden = !active;
+  };
   const requestCancel = () => {
-    if (cancelled) return;
+    // A programmatic completion close is not a user cancellation. Closing the
+    // title bar while a run is active still requests cancellation as before.
+    if (cancelled || args.isComplete?.()) return;
     cancelled = true;
     cancel.disabled = true;
+    setCanSkip(false);
     message.textContent = "Cancel requested…";
     try {
       args.cancel?.();
@@ -33,8 +45,14 @@ window.addEventListener("load", () => {
   };
 
   cancel.addEventListener("click", requestCancel);
+  skip?.addEventListener("click", () => {
+    if (skip.disabled || cancelled || args.isComplete?.()) return;
+    setCanSkip(false);
+    try { args.skipCurrentFeed?.(); } catch (_) {}
+  });
   window.addEventListener("unload", requestCancel, { once: true });
   update(args.initialMessage || "Preparing…", args.initialCurrent, args.initialTotal);
   setUsage(args.lastUsage);
-  window.FeedRankerProgress = { update, setUsage, setTitle };
+  setCanSkip(args.canSkipCurrentFeed?.());
+  window.FeedRankerProgress = { update, setUsage, setTitle, setCanSkip };
 });

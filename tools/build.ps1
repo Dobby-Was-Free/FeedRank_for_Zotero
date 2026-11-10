@@ -107,31 +107,49 @@ finally {
 }
 
 
-# Reopen the artifact and compare every packaged file with its source. An archive that merely built
-# is not an archive that is right, and the README says this is checked -- so it is checked here.
-$verifyRoot = Join-Path $env:TEMP ("feedrank-verify-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $verifyRoot | Out-Null
+# Stream hashes work in both Windows PowerShell and PowerShell 7, even when the
+# host's module path does not provide Get-FileHash. No temporary extraction or
+# recursive filesystem cleanup is needed to verify the archive.
+function Get-FeedRankStreamHash([System.IO.Stream]$Stream) {
+  $algorithm = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($algorithm.ComputeHash($Stream))).Replace('-', '')
+  }
+  finally { $algorithm.Dispose() }
+}
+
+$expectedEntries = @($relativeFiles | ForEach-Object { $_ -replace '\\', '/' })
+$verificationArchive = [System.IO.Compression.ZipFile]::OpenRead($outputFullPath)
 try {
-  [System.IO.Compression.ZipFile]::ExtractToDirectory($outputFullPath, $verifyRoot)
   $mismatched = @()
   $checked = 0
-  Get-ChildItem -LiteralPath $verifyRoot -Recurse -File | ForEach-Object {
-    $relative = $_.FullName.Substring($verifyRoot.Length + 1).Replace('\', '/')
-    $sourcePath = Join-Path $projectRoot $relative
+  foreach ($entry in $verificationArchive.Entries) {
+    $relative = $entry.FullName
+    $sourcePath = [IO.Path]::GetFullPath((Join-Path $projectRoot $relative))
     $checked++
-    if (-not (Test-Path -LiteralPath $sourcePath)) {
-      $mismatched += "$relative (not in the source tree)"
-    } elseif ((Get-FileHash -LiteralPath $_.FullName).Hash -ne (Get-FileHash -LiteralPath $sourcePath).Hash) {
-      $mismatched += "$relative (differs from source)"
+    if ($expectedEntries -cnotcontains $relative -or
+        -not $sourcePath.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+      $mismatched += "$relative (not an expected source file)"
+      continue
     }
+    $packagedStream = $entry.Open()
+    $sourceStream = [IO.File]::OpenRead($sourcePath)
+    try {
+      if ((Get-FeedRankStreamHash $packagedStream) -ne (Get-FeedRankStreamHash $sourceStream)) {
+        $mismatched += "$relative (differs from source)"
+      }
+    }
+    finally { $packagedStream.Dispose(); $sourceStream.Dispose() }
   }
+  if ($checked -ne $expectedEntries.Count) { throw 'The package file count does not match the source list.' }
   if ($mismatched.Count -gt 0) {
     throw ('Packaged files do not match the source: ' + ($mismatched -join ', '))
   }
   Write-Output "Verified $checked packaged files byte for byte against the source."
 }
 finally {
-  Remove-Item -LiteralPath $verifyRoot -Recurse -Force -ErrorAction SilentlyContinue
+  $verificationArchive.Dispose()
 }
 
 Write-Output "Created $outputFullPath"

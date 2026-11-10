@@ -1112,7 +1112,7 @@ test("a delivery outcome tells the panes, so Last email refreshes after the send
     source: "weekly",
     runID: "auto-listener-2",
     localDay: "2026-09-30",
-    records: [paper()],
+    records: [paper({ title: "A different second digest" })],
     autoSendApproved: true,
   });
   assert.equal(pings.length, 2, "a broken listener does not silence the others");
@@ -1125,7 +1125,7 @@ test("a delivery outcome tells the panes, so Last email refreshes after the send
     source: "weekly",
     runID: "auto-listener-3",
     localDay: "2026-09-30",
-    records: [paper()],
+    records: [paper({ title: "A different third digest" })],
     autoSendApproved: true,
   });
   assert.equal(pings.length, 2, "an unsubscribed listener is not called again");
@@ -1310,7 +1310,8 @@ test("a completed delivery is saved even when the record cap is already full", a
   // that used to crowd everything else out.
   for (let index = 0; index < 3; index++) {
     await harness.service.rebuildDigest({
-      records: [paper()], localDay: "2026-09-30", runID: "preview:2026-09-30:test" + index,
+      records: [paper({ title: "Distinct failed digest " + index })],
+      localDay: "2026-09-30", runID: "preview:2026-09-30:test" + index,
     });
     harness.transport.queue([
       GREETING, EHLO_IMPLICIT, AUTH_OK, SENDER_OK, RECIPIENT_OK, DATA_READY,
@@ -1483,8 +1484,142 @@ test("persisted state holds no credential and stays inside the module's bounds",
     JSON.stringify({ delivery: state.emailDelivery, submissions: state.emailSubmissions }).length
       <= EmailService.MAX_EMAIL_STATE_LENGTH,
   );
-  assert.equal(EmailService.MAX_MESSAGE_STATE_LENGTH, 200000);
-  assert.equal(EmailService.MAX_EMAIL_STATE_LENGTH, 400000);
+  assert.equal(EmailService.MAX_MESSAGE_STATE_LENGTH, Email.MAX_MESSAGE_LENGTH);
+  assert.equal(EmailService.MAX_EMAIL_STATE_LENGTH, 12 * 1024 * 1024);
+});
+
+test("a 100-paper digest replaces a stale five-paper preview and submits safely with mocks", async () => {
+  const harness = createHarness();
+  await configureSession(harness.service);
+  harness.service.saveConfig({
+    maximumPapers: 100, priorityCount: 10, readingListCount: 90,
+    readingListEnabled: true, automaticSendingEnabled: true,
+  });
+  const records = Array.from({ length: 100 }, (_, index) => paper({
+    id: "large-" + index,
+    title: "Research study " + index + ": " + "a scientifically useful title ".repeat(5),
+    authors: ["A. Author", "B. Author", "C. Author"],
+    institutions: ["Example University"],
+    source: "Journal of Research and Discovery", date: "2026-10-05",
+    doi: "10.1234/example." + index, url: "https://example.test/papers/" + index,
+  }));
+  await harness.service.rebuildDigest({ records: records.slice(0, 5), localDay: "2026-10-01" });
+  assert.equal(harness.service.currentSnapshot().recordCount, 5);
+  harness.transport.queue();
+  const result = await harness.service.recordCompletedWeeklyRun({
+    source: "weekly", runID: "large-week", localDay: "2026-10-05",
+    records, autoSendApproved: true,
+  });
+  assert.equal(result.snapshot.recordCount, 100);
+  assert.equal(result.snapshot.priorityCount, 10);
+  assert.equal(result.snapshot.readingListCount, 90);
+  assert.equal(result.autoResult.status, "accepted");
+  assert.equal(harness.transport.connections.length, 1);
+  const saved = harness.service.currentSnapshot();
+  assert.ok(JSON.stringify(saved.digest).length > 60000, "reproduces the old size failure");
+  assert.ok(JSON.stringify(saved.digest).length < EmailService.MAX_DIGEST_CONTENT_LENGTH);
+  assert.ok(saved.digest.text.includes(records[99].title.trim()));
+  harness.service.assertStateBounds(harness.state().emailDelivery, harness.state().emailSubmissions);
+  assertNoSecretIn([JSON.stringify(harness.state())], "large digest state");
+});
+
+test("a long Unicode 100-paper digest remains valid across restart and MIME construction", async () => {
+  const harness = createHarness();
+  await configureSession(harness.service);
+  harness.service.saveConfig({ maximumPapers: 100, priorityCount: 10,
+    readingListEnabled: true, readingListCount: 90 });
+  const records = Array.from({ length: 100 }, (_, index) => paper({
+    id: "unicode-" + index, title: "科研论文标题：" + "物理研究与方法分析".repeat(35) + index,
+    authors: ["甲研究员", "乙研究员", "丙研究员"], institutions: ["示例研究大学"],
+    source: "示例学术期刊", doi: "10.1234/unicode." + index,
+  }));
+  await harness.service.rebuildDigest({ records, localDay: "2026-10-05" });
+  const preview = await harness.service.openPreview({});
+  const frozen = frozenSubmission(harness, preview.submissionKey);
+  assert.ok(frozen.message.length <= Email.MAX_MESSAGE_LENGTH);
+  const restarted = createHarness({ initialState: harness.state() });
+  await restarted.service.recoverInterruptedSubmissions();
+  assert.equal(restarted.service.currentSnapshot().recordCount, 100);
+  assert.equal(frozenSubmission(restarted, preview.submissionKey).message, frozen.message);
+  assert.equal(restarted.transport.connections.length, 0);
+});
+
+test("failed digest preparation hides the stale preview but preserves frozen submissions", async () => {
+  const harness = createHarness();
+  const prepared = await prepareWeekly(harness);
+  const frozen = frozenSubmission(harness, prepared.submissionKey);
+  const originalEmail = harness.service.Email;
+  harness.service.Email = { ...Email, buildDigest: () => ({
+    ...Email.buildDigest({ date: "2026-10-05", records: [paper()] }),
+    text: "x".repeat(EmailService.MAX_DIGEST_CONTENT_LENGTH + 1),
+  }) };
+  await assert.rejects(harness.service.rebuildDigest({ records: [paper()], localDay: "2026-10-05" }),
+    /too large or invalid/);
+  assert.equal(harness.service.currentSnapshot(), null);
+  assert.match((await harness.service.getStatus()).digestBuildError, /too large/);
+  await assert.rejects(harness.service.openPreview({}), /too large/);
+  assert.equal(frozenSubmission(harness, prepared.submissionKey).message, frozen.message);
+  assert.equal(harness.transport.connections.length, 0);
+  harness.service.Email = originalEmail;
+  await harness.service.rebuildDigest({ records: [paper()], localDay: "2026-10-05" });
+  assert.equal((await harness.service.getStatus()).digestBuildError, "");
+});
+
+test("refreshing the same accepted or uncertain digest under a new run ID never resubmits", async () => {
+  for (const uncertain of [false, true]) {
+    const harness = createHarness();
+    const prepared = await prepareWeekly(harness);
+    const frozen = frozenSubmission(harness, prepared.submissionKey);
+    harness.transport.queue(uncertain
+      ? [GREETING, EHLO_IMPLICIT, AUTH_OK, SENDER_OK, RECIPIENT_OK, DATA_READY,
+        new Error("mock timeout after submission")]
+      : ACCEPTED_REPLIES);
+    const sent = await harness.service.sendPreparedSubmission(prepared.submissionKey, {});
+    assert.equal(sent.status, uncertain ? "unknown" : "accepted");
+    await harness.service.rebuildDigest({ records: [paper()], localDay: "2026-09-30", runID: "manual-new-identity" });
+    const again = await harness.service.openPreview({});
+    assert.equal(again.submissionKey, prepared.submissionKey);
+    assert.equal((await harness.service.getStatus()).currentSubmission.status, sent.status);
+    assert.equal(frozenSubmission(harness, prepared.submissionKey).message, frozen.message);
+    await assert.rejects(harness.service.sendPreparedSubmission(prepared.submissionKey, {}), /only its prepared/);
+    assert.equal(harness.transport.connections.length, 1);
+  }
+});
+
+test("an empty current period hides an earlier digest without deleting its frozen history", async () => {
+  const harness = createHarness();
+  const prepared = await prepareWeekly(harness);
+  const frozen = frozenSubmission(harness, prepared.submissionKey);
+  await harness.service.invalidateSnapshot("No eligible articles in the current period");
+  assert.equal((await harness.service.previewCurrentDigest()).available, false);
+  await assert.rejects(harness.service.openPreview({}), /No eligible articles/);
+  assert.equal(frozenSubmission(harness, prepared.submissionKey).message, frozen.message);
+  assert.equal(harness.transport.connections.length, 0);
+});
+
+test("unchanged pane previews avoid rewriting state, but a changed score creates a new exact draft", async () => {
+  const harness = createHarness();
+  await configureSession(harness.service);
+  let writes = 0;
+  const mutate = harness.service.State.mutate;
+  harness.service.State.mutate = (...args) => { writes++; return mutate(...args); };
+  const input = { records: [paper({ score: 88 })], localDay: "2026-10-05", runID: "same-manual-label" };
+  await harness.service.rebuildDigest(input);
+  await harness.service.rebuildDigest(input);
+  assert.equal(writes, 1, "pane polling should not rewrite the same email/rank shards");
+  const first = await harness.service.openPreview({});
+  harness.transport.queue();
+  assert.equal((await harness.service.sendPreparedSubmission(first.submissionKey, {})).status, "accepted");
+  await harness.service.rebuildDigest({ ...input, records: [paper({ score: 91 })] });
+  const second = await harness.service.openPreview({});
+  assert.notEqual(second.submissionKey, first.submissionKey);
+  assert.ok(second.text.includes("91/100"));
+  assert.equal((await harness.service.getStatus()).currentSubmission.status, "prepared");
+  assert.equal(harness.transport.connections.length, 1, "the changed preview itself sends nothing");
+  await harness.service.invalidateSnapshot("No eligible articles");
+  const after = writes;
+  await harness.service.invalidateSnapshot("No eligible articles");
+  assert.equal(writes, after, "empty pane polling should not rewrite state either");
 });
 
 // ---------------------------------------------------------------------------

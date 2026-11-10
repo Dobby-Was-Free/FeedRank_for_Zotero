@@ -45,6 +45,8 @@ You need **Zotero 10**, a working **[Awesome GPT](https://github.com/MuiseDestin
 
 The published release notes report testing on **Windows with Zotero 10**. macOS also passed basic function tests, and Linux has not yet been verified. Model integration can also depend on the installed Awesome GPT version.
 
+The 0.3.2 regression checks were run offline; they do not establish live platform compatibility for the new RSS changes.
+
 For download verification, compare the file's SHA-256 with the digest shown for that exact release asset. Checksums belong to individual builds, not just version names.
 
 ## Quick start
@@ -79,6 +81,21 @@ Sort the **Score** column, select an article to read its explanation, or open **
 **Score** is the model's estimate of relevance to your profile. **Priority** adds a bounded significance bonus and is capped at 100. Depending on the article and available information, that bonus can use journal metrics or model-estimated significance; model estimates are not measured bibliometric facts.
 
 Set the significance weight to **0** to prioritize relevance alone. Neither number establishes scientific quality, correctness, or a paper's actual importance. Use the explanation and original article to make the reading decision.
+
+## Commands
+
+Under **Tools → FeedRank for Zotero**:
+
+- **Refresh and score** — refresh feeds and score eligible new or unscored articles in one cancellable run.
+- **Score last N days…** — fill missing scores in a publication-date window without refreshing RSS.
+- **Rescore last N days…** — replace the stored scores in that window.
+- **Show scored articles** — open the combined results list.
+- **Refresh & email…** — refresh feeds, fill missing scores for the daily/weekly/monthly period, then open the exact digest preview. Click Send after reviewing; no automatic-send opt-in is needed.
+- **Update journal info** — look up journal metrics for the current scope with an EasyScholar key.
+- **Settings…** — open the FeedRank settings pane.
+
+Right-click library items for **Score selected items** or **Rescore selected items**.
+Right-click a feed for **Score N days…** or **Rescore N days…** in that feed's scope.
 
 ## Optional email digest
 
@@ -116,10 +133,25 @@ See the [privacy documentation](https://github.com/Dobby-Was-Free/FeedRank_for_Z
 
 ## Troubleshooting
 
+Version 0.3.2 bounds RSS update waits to 90 seconds, local data waits to 15 seconds,
+and the RSS refresh phase to five minutes. Progress names the feed and stage,
+shows elapsed time and feeds remaining, and offers **Skip current feed** beside
+Cancel. Slow feeds are reported rather than holding the entire job indefinitely.
+This stops FeedRank waiting; Zotero can still finish its native RSS work later.
+FeedRank avoids starting a duplicate update while its earlier call is pending.
+Skipped feeds are excluded from fallback/settle scans for that run.
+
+Progress closes on completion or failure; manually requested results and email
+previews stay open for review. Large-state operations yield between chunks to
+reduce main-thread blocking. Some earlier builds cannot read current saved-state
+pointers, so avoid downgrading an active profile.
+
 | Problem | Start here |
 | --- | --- |
 | **No new scores** | Check the profile, model configuration, candidate limit, and date window. Try a small selection and read the progress message. |
+| **RSS refresh waits too long** | Check the named feed/stage timer, use Skip current feed, and review Check schedule. Zotero's underlying work may continue in the background. |
 | **The model is unavailable** | Check that Awesome GPT works independently and note both plugin versions when reporting the problem. |
+| **Journal metrics missing** | Save an EasyScholar key, enable lookup, and run Update journal info for the relevant scope. |
 | **Email does not send** | Use Test connection and check the provider's SMTP, authentication, and account-policy requirements. Server acceptance does not guarantee inbox delivery. |
 | **A scheduled run did not happen** | Confirm Zotero was open, the local run time is set, and the selected repeat/day is correct. |
 | **Scores no longer fit your interests** | Update the profile and rescore the relevant articles. |
@@ -131,13 +163,43 @@ For a bug report, include your operating system, Zotero and plugin versions, rep
 From a source checkout, use Node.js for the offline tests and PowerShell for the packaged build:
 
 ```powershell
-npm test
-powershell -File tools\build.ps1
+npm test                            # 347 offline tests: no network, no Zotero
+npm run benchmark                   # synthetic 2,000-paper cache; no live profile
+powershell -File tools\build.ps1    # -> dist\FeedRank-<version>.xpi
 ```
 
-The build reads the version from `manifest.json`, writes `dist/FeedRank-<version>.xpi`, and compares packaged files with their source. Runtime installation does not require Node.js or a separate application.
+The build writes `dist/FeedRank-0.3.2.xpi`, reads the version from `manifest.json`, packages a fixed file list (the manifest, the
+bootstrap, `chrome/`, `locale/`) and verifies that every packaged file is byte-identical to its source.
+`tools/state-snapshot.js` records and compares the local score cache, which is how a silent change
+there gets noticed.
+Runtime installation does not require Node.js or a separate application. These
+checks use mock providers and Zotero environments; live performance and provider
+behavior still need separate verification.
 
-Keep source, tests, tools, and public documentation in Git. Keep generated packages in Releases and private settings, snapshots, profiles, and raw logs out of the repository. The [test report](https://github.com/Dobby-Was-Free/FeedRank_for_Zotero/blob/main/docs/TEST_REPORT.md) should distinguish offline checks from live Zotero tests.
+Keep source, tests, tools, and public documentation in Git. Keep generated packages in Releases and private settings, snapshots, profiles, raw logs, and detailed local test reports out of the repository.
+
+### Publishing a release
+
+Keep the approved version (currently 0.3.2) for ongoing local revisions. Do not
+bump it for each requested fix; change it only when the user requests or approves
+a new release version.
+
+Publish project source, tests, user documentation and the release XPI only.
+Detailed local test reports, settings backups, library exports and connector
+data stay private. Review the staged file list before committing; do not upload
+the entire workspace folder.
+
+1. Set the version in `manifest.json` (and `package.json`).
+2. `powershell -File tools\build.ps1` — it packages and then re-opens the archive to compare every
+   file with its source.
+3. Publish the XPI as a GitHub Release asset, tagged `v<version>`.
+4. Update `updates.json`: Zotero reads that file from
+   `applications.zotero.update_url` and offers the new version to installed copies. The
+   `update_link` names the Release asset, so it can be written before the release itself exists.
+
+The update manifest is served by GitHub Pages from **main / root**. Without that
+publication, changing the local file does not make the release available to
+installed copies.
 
 ## License and acknowledgements
 

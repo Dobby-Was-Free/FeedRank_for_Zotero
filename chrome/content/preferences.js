@@ -315,7 +315,7 @@ Zotero.FeedRankerPreferencePane = {
       const preview = root.querySelector("#feed-ranker-email-preview");
       if (preview) {
         preview.value = status.snapshot?.text ||
-          (previewState?.reason ||
+          (status.digestBuildError || previewState?.reason ||
             "No completed weekly digest is available yet. It appears after a scoring run with eligible papers.");
       }
       const last = root.querySelector("#feed-ranker-email-last");
@@ -335,7 +335,7 @@ Zotero.FeedRankerPreferencePane = {
       // Why there is no preview is part of the status, not a silence.
       const previewText = status.snapshot?.text
         ? ""
-        : " " + (previewState?.reason || "No digest preview is available yet.");
+        : " " + (status.digestBuildError || previewState?.reason || "No digest preview is available yet.");
       this.setEmailStatus(root, credentialText + deliveryText + previewText);
     } catch (error) {
       this.setEmailStatus(root, "Unable to load email status: " + String(error?.message || error));
@@ -451,11 +451,29 @@ Zotero.FeedRankerPreferencePane = {
   },
 
   /*
-  /*
-   * Run the whole weekly job now: refresh, settle, score, and the digest. Manual
-   * means "do it even though this week is already marked done". The Tools menu
-   * command is what reaches this now; the pane's test button is gone.
+   * The ordinary manual refresh-email action, also offered by the Tools menu.
+   * Refresh and fill missing scores, then review; the preview's Send click is
+   * the only submission authorization, independent of the automatic schedule.
    */
+  async refreshAndEmail(root) {
+    const main = this.getService();
+    const button = root.querySelector("#feed-ranker-refresh-email");
+    if (!main?.runRefreshAndEmail || button?.disabled) return;
+    if (button) button.disabled = true;
+    this.setEmailStatus(root, main.t("pane.checking"));
+    try {
+      const result = await main.runRefreshAndEmail(root.ownerGlobal);
+      this.setEmailStatus(root, result?.previewReady
+        ? main.t("pane.refreshEmailReady", { count: result.snapshot?.recordCount || 0 })
+        : result?.cancelled ? "Cancelled; no email submitted."
+          : result?.reason || "Another FeedRank operation is already running.");
+    } catch (error) {
+      this.setEmailStatus(root, main.t("pane.refreshEmailFailed", { reason: String(error?.message || error) }));
+    } finally {
+      if (button) button.disabled = false;
+    }
+  },
+
   async saveEmailCredentials(root) {
     const service = this.getEmailService();
     const secret = this.emailField(root, "secret");
@@ -810,6 +828,9 @@ Zotero.FeedRankerPreferencePane = {
     });
     root.querySelector("#feed-ranker-weekly-check")?.addEventListener("command", () => {
       this.checkSchedule(root);
+    });
+    root.querySelector("#feed-ranker-refresh-email")?.addEventListener("command", () => {
+      void this.refreshAndEmail(root);
     });
     root.querySelector("#feed-ranker-settings-export")?.addEventListener("command", () => {
       void this.saveSettingsFile(root);

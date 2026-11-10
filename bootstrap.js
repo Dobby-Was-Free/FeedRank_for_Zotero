@@ -124,7 +124,8 @@ async function startup({ rootURI }) {
     Diagnostics: feedRankerContext.FeedRankDiagnostics,
     State: {
       load: () => feedRankerService.loadState(),
-      mutate: (mutator) => feedRankerService.mutateState(mutator),
+      loadAsync: () => feedRankerService.loadStateAsync(),
+      mutate: (mutator) => feedRankerService.mutateState(mutator, { returnState: false }),
     },
   });
   Zotero.FeedRankEmail = feedRankerEmailService;
@@ -139,7 +140,8 @@ async function startup({ rootURI }) {
     Journal: feedRankerContext.FeedRankerJournal,
     State: {
       load: () => feedRankerService.loadState(),
-      mutate: (mutator) => feedRankerService.mutateState(mutator),
+      loadJournalCache: () => feedRankerService.loadJournalCache(),
+      mutate: (mutator) => feedRankerService.mutateState(mutator, { returnState: false }),
     },
   });
   Zotero.FeedRankJournal = feedRankerJournalService;

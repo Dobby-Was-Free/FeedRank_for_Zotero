@@ -123,7 +123,7 @@ window.addEventListener("load", () => {
       field("email-from").value = connection.from || "";
       field("email-to").value = connection.to || "";
       field("email-preview").value = status.snapshot?.text ||
-        (previewState?.reason ||
+        (status.digestBuildError || previewState?.reason ||
           "No completed weekly digest is available yet. It appears after a scoring run with eligible papers.");
       field("email-last").textContent = formatLastDelivery(status.lastDelivery);
       field("email-retry").disabled = !status.retryKey || status.sending;
@@ -137,7 +137,7 @@ window.addEventListener("load", () => {
           ? " Current delivery: " + current.status +
             (current.messageSubmitted ? " (message submitted; SMTP cannot confirm inbox delivery)." : ".")
           : "") +
-        (status.snapshot?.text ? "" : " " + (previewState?.reason || "")));
+        (status.snapshot?.text ? "" : " " + (status.digestBuildError || previewState?.reason || "")));
     } catch (error) {
       emailStatus("Unable to load email status: " + String(error?.message || error));
     }
@@ -342,6 +342,24 @@ window.addEventListener("load", () => {
       } catch (_) {}
     } catch (error) {
       emailStatus("The schedule could not be inspected: " + String(error?.message || error));
+    }
+  });
+
+  field("refresh-email").addEventListener("click", async () => {
+    const button = field("refresh-email");
+    if (!mainService?.runRefreshAndEmail || button.disabled) return;
+    button.disabled = true;
+    emailStatus(mainService.t("pane.checking"));
+    try {
+      const result = await mainService.runRefreshAndEmail(window.opener || window);
+      emailStatus(result?.previewReady
+        ? mainService.t("pane.refreshEmailReady", { count: result.snapshot?.recordCount || 0 })
+        : result?.cancelled ? "Cancelled; no email submitted."
+          : result?.reason || "Another FeedRank operation is already running.");
+    } catch (error) {
+      emailStatus(mainService.t("pane.refreshEmailFailed", { reason: String(error?.message || error) }));
+    } finally {
+      button.disabled = false;
     }
   });
 

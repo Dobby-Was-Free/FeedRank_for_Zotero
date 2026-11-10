@@ -6,6 +6,13 @@ dist/
 # Private development notes: handoff history, full test logs, anything written with one
 # machine in front of you. Never published.
 private/
+*-private/
+
+# Local Zotero connector/library work is not part of FeedRank's public source.
+/.zotero-*
+/paper-*.json
+/paper-*.py
+/paper-downloads/
 
 # A staging copy made for review; the repository holds one source tree, not copies of it.
 Package for release/

@@ -142,7 +142,7 @@
         <html:label for="retries">Retries per batch (0–3)</html:label>
         <html:div class="ctl"><html:input id="retries" type="number" min="0" max="3"/></html:div>
 
-        <html:label for="timeout">Request timeout (ms)</html:label>
+        <html:label for="timeout">Model request timeout (ms)</html:label>
         <html:div class="ctl"><html:input id="timeout" type="number" min="15000" max="300000" step="1000"/></html:div>
       </html:div>
 
@@ -239,8 +239,10 @@
       <html:div class="actions">
         <html:button id="email-save-options">Save digest settings</html:button>
         <html:button id="weekly-check">Check schedule</html:button>
+        <html:button id="refresh-email">Refresh &amp; email…</html:button>
       </html:div>
       <html:div class="hint">Check schedule reports whether the timer is armed, when the next run is due, and what the last one did.</html:div>
+      <html:div class="hint" data-i18n="pane.refreshEmailHint">Save settings first; this checks the last 1/7/30 days and opens a preview. Nothing is sent until you click Send.</html:div>
 
       <html:h2 data-i18n="pane.settings.email-connection">Email connection</html:h2>
       <html:div class="hint">Server first, then the credential. The password is never stored in a preference.</html:div>

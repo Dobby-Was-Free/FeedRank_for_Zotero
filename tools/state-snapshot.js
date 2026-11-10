@@ -58,14 +58,15 @@ function readPrefs(profile) {
 const hash = (text) => crypto.createHash("sha256").update(String(text)).digest("hex").slice(0, 16);
 const bare = (key) => key.replace(/^extensions\.zotero\./, "");
 
-function snapshot(profile) {
-  const { values, mtime, file } = readPrefs(profile);
+function snapshot(profile, prefsSnapshot = readPrefs(profile)) {
+  const { values, mtime, file } = prefsSnapshot;
   const keys = {};
   for (const [key, value] of values) keys[bare(key)] = { characters: value.length, hash: hash(value) };
 
   const stateKey = "extensions.zotero.feedranker.state";
   const state = values.get(stateKey) ? JSON.parse(values.get(stateKey)) : {};
   const generation = state.stateStorage?.generation || "";
+  const rankGeneration = state.stateStorage?.ranks?.generation || generation;
   const ranks = state.ranks || {};
   const journalCache = state.journalCache || {};
 
@@ -88,6 +89,10 @@ function snapshot(profile) {
     for (const pair of Array.isArray(entries) ? entries : []) {
       const [id, record] = Array.isArray(pair) ? pair : [pair?.[0], pair?.[1]];
       if (!id || !record) continue;
+      const active = shard[1] === rankGeneration;
+      // A failed staged save may leave another copy of an id. It must not
+      // hide the committed record just because that preference was read later.
+      if (records[id]?.active && !active) continue;
       records[id] = {
         score: record.score ?? null,
         confidence: record.confidence ?? null,
@@ -95,7 +100,7 @@ function snapshot(profile) {
         hash: hash(JSON.stringify(record)),
         shard: short,
         generation: shard[1],
-        active: shard[1] === generation,
+        active,
       };
     }
   }
@@ -205,6 +210,10 @@ function compare(before, after) {
   return lines.join("\n");
 }
 
+// Requiring this module for an offline fixture must not inspect a live profile
+// or create backup files. Direct CLI invocation retains the existing workflow.
+module.exports = { snapshot, compare };
+if (require.main === module) {
 const profile = findProfile();
 // `private/` is excluded by .gitignore. A snapshot names preference files and contains article ids
 // and reading state, so it is personal material: never commit it, never attach it to an issue.
@@ -252,4 +261,5 @@ if (args.includes("--compare")) {
     console.log("\n=== change since " + before.takenAt);
     console.log(compare(before, current));
   }
+}
 }
