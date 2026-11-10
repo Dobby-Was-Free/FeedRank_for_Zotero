@@ -650,7 +650,10 @@
         src: this.rootURI + "chrome/content/preferences.xhtml",
         id: PREFERENCES_PANE_ID,
         label: TOOL_NAME,
-        scripts: [this.rootURI + "chrome/content/preferences.js"],
+        scripts: [
+          this.rootURI + "chrome/content/form-controls.js",
+          this.rootURI + "chrome/content/preferences.js",
+        ],
         stylesheets: [],
       });
     }

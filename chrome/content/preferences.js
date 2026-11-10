@@ -37,6 +37,22 @@ Zotero.FeedRankerPreferencePane = {
     return root.querySelector("#" + this.fields[name]);
   },
 
+  form(root) {
+    this.forms ||= new WeakMap();
+    if (!this.forms.has(root)) this.forms.set(root, globalThis.FeedRankFormControls.create(root));
+    return this.forms.get(root);
+  },
+
+  editableIDs(ids) {
+    return ids.map((id) => id.startsWith("feed-ranker-") ? id : "feed-ranker-email-" + id);
+  },
+
+  allEditableIDs() {
+    return [...Object.values(this.fields), ...this.editableIDs(this.EMAIL_EDITABLE_FIELDS),
+      "feed-ranker-easyscholar-enabled", "feed-ranker-easyscholar-refresh",
+      "feed-ranker-email-secret", "feed-ranker-easyscholar-key"];
+  },
+
   /*
    * Guards against a repopulate overwriting a control the user is working in.
    *
@@ -53,28 +69,11 @@ Zotero.FeedRankerPreferencePane = {
    * clearing credentials continues to update the form.
    */
   markDirtyOnEdit(root, ids) {
-    for (const id of ids) {
-      const element = root.querySelector("#" + id);
-      if (!element || element.__feedRankDirtyBound) continue;
-      element.__feedRankDirtyBound = true;
-      const mark = () => { element.__feedRankDirty = true; };
-      element.addEventListener("input", mark);
-      element.addEventListener("change", mark);
-    }
-  },
-
-  // Write a value unless the user has edited that control since the last save.
-  setFieldUnlessEdited(element, value) {
-    if (!element || element.__feedRankDirty === true) return false;
-    element.value = value ?? "";
-    return true;
+    this.form(root).bind(this.editableIDs(ids));
   },
 
   clearDirty(root, ids) {
-    for (const id of ids) {
-      const element = root.querySelector("#" + id);
-      if (element) element.__feedRankDirty = false;
-    }
+    this.form(root).clear(this.editableIDs(ids));
   },
 
   readConfig(root) {
@@ -85,10 +84,9 @@ Zotero.FeedRankerPreferencePane = {
     return config;
   },
 
-  writeConfig(root, config) {
+  writeConfig(root, config, options = {}) {
     for (const name of Object.keys(this.fields)) {
-      const field = this.getField(root, name);
-      if (field) field.value = config[name] ?? "";
+      this.form(root).write(this.fields[name], config[name] ?? "", options);
     }
   },
 
@@ -119,24 +117,39 @@ Zotero.FeedRankerPreferencePane = {
     if (monthly) monthly.style.display = frequency === "monthly" ? "" : "none";
   },
 
-  populate(root) {
+  populate(root, { force = false, snapshot = null } = {}) {
     const service = this.getService();
     const config = service?.loadConfig?.();
     if (!config) return;
-    this.writeConfig(root, config);
+    if (force) {
+      const form = this.form(root);
+      form.invalidate();
+      snapshot ||= form.capture(this.allEditableIDs());
+      form.accept(this.allEditableIDs(), snapshot);
+      form.write("feed-ranker-email-secret", "", { force: true, snapshot });
+      form.write("feed-ranker-easyscholar-key", "", { force: true, snapshot });
+    }
+    this.writeConfig(root, config, { force, snapshot });
     this.syncDayControl(root);
     const status = root.querySelector("#feed-ranker-save-status");
     if (status) status.value = "";
     this.renderPromptPreview(root);
-    void this.populateEmail(root);
-    void this.populateJournal(root);
+    void this.populateEmail(root, { force, snapshot });
+    void this.populateJournal(root, { force, snapshot });
   },
 
   save(root) {
     const service = this.getService();
     if (!service?.saveConfig) return;
+    const form = this.form(root);
+    const ids = Object.values(this.fields);
+    const snapshot = form.capture(ids);
     const saved = service.saveConfig(this.readConfig(root));
-    this.writeConfig(root, saved);
+    form.invalidate("email");
+    this.writeConfig(root, saved, { force: true, snapshot });
+    form.accept(ids, snapshot);
+    this.syncDayControl(root);
+    void this.populateEmail(root);
     this.renderPromptPreview(root);
     const status = root.querySelector("#feed-ranker-save-status");
     // "Saved." alone is not an answer to "I set a time and nothing happened": the
@@ -150,7 +163,11 @@ Zotero.FeedRankerPreferencePane = {
   // protected until the settings are saved.
   EMAIL_EDITABLE_FIELDS: Object.freeze([
     "host", "port", "tls-mode", "auth-method", "username", "from", "to",
-    "max-papers", "min-score", "priority-count", "reading-count",
+    "max-papers", "min-score", "priority-count", "reading-count", "reading-enabled", "auto-enabled",
+  ]),
+
+  EMAIL_OPTION_FIELDS: Object.freeze([
+    "max-papers", "min-score", "priority-count", "reading-count", "reading-enabled", "auto-enabled",
   ]),
 
   emailField(root, id) {
@@ -188,7 +205,7 @@ Zotero.FeedRankerPreferencePane = {
     "host", "port", "tls-mode", "auth-method", "username", "from", "to",
   ]),
 
-  writeEmailConnection(root, connection = {}) {
+  writeEmailConnection(root, connection = {}, options = {}) {
     const values = {
       host: connection.host || "",
       port: connection.port || "",
@@ -196,33 +213,31 @@ Zotero.FeedRankerPreferencePane = {
       from: connection.from || "",
       to: connection.to || "",
     };
-    if (connection.configured) {
+    if (connection.tlsMode) {
       values["tls-mode"] = connection.tlsMode;
+    }
+    if (connection.authMethod) {
       values["auth-method"] = connection.authMethod;
     }
     for (const [id, value] of Object.entries(values)) {
       // Never overwrite a control the user has edited but not yet saved.
-      this.setFieldUnlessEdited(this.emailField(root, id), value);
+      this.form(root).write("feed-ranker-email-" + id, value, options);
     }
   },
 
-  writeEmailConfig(root, config = {}) {
+  writeEmailConfig(root, config = {}, options = {}) {
     const values = {
       "max-papers": config.maximumPapers ?? 10,
       "min-score": config.minimumRelevanceScore ?? 70,
       "priority-count": config.priorityCount ?? 5,
       "reading-count": config.readingListCount ?? 30,
-      "tls-mode": config.tlsMode ?? "starttls",
-      "auth-method": config.authMethod ?? "plain",
     };
     for (const [id, value] of Object.entries(values)) {
       // Same rule as the connection fields: an unsaved edit is the user's.
-      this.setFieldUnlessEdited(this.emailField(root, id), value);
+      this.form(root).write("feed-ranker-email-" + id, value, options);
     }
-    const reading = this.emailField(root, "reading-enabled");
-    if (reading) reading.checked = config.readingListEnabled === true;
-    const automatic = this.emailField(root, "auto-enabled");
-    if (automatic) automatic.checked = config.automaticSendingEnabled === true;
+    this.form(root).write("feed-ranker-email-reading-enabled", config.readingListEnabled, { ...options, checked: true });
+    this.form(root).write("feed-ranker-email-auto-enabled", config.automaticSendingEnabled, { ...options, checked: true });
   },
 
   /*
@@ -284,7 +299,11 @@ Zotero.FeedRankerPreferencePane = {
     field.textContent = String(message || "");
   },
 
-  async populateEmail(root) {
+  async populateEmail(root, { force = false, snapshot = null } = {}) {
+    const form = this.form(root);
+    const token = form.begin("email");
+    // A force refresh is intentional, but edits made after it started still win.
+    snapshot ||= force ? form.capture(this.editableIDs(this.EMAIL_EDITABLE_FIELDS)) : null;
     const service = this.getEmailService();
     if (!service?.getStatus) {
       this.setEmailStatus(root, "Email delivery is still starting.");
@@ -306,12 +325,20 @@ Zotero.FeedRankerPreferencePane = {
       } catch (_) {
         // A digest that cannot be rebuilt must not stop the rest of the pane.
       }
+      if (!form.isCurrent(token)) return;
       const status = await service.getStatus();
-      this.writeEmailConfig(root, status.config);
+      if (!form.isCurrent(token)) return;
+      this.writeEmailConfig(root, status.config, { force, snapshot });
       // Written through the edit guard, in one place, so the TLS-mode and
       // authentication-method dropdowns are never reset out from under a click.
       const connection = status.credentials || {};
-      this.writeEmailConnection(root, connection);
+      // Apply the final credential mode only once, not a transient option
+      // default followed by another value that dismisses an open popup.
+      this.writeEmailConnection(root, { ...connection,
+        tlsMode: connection.configured ? connection.tlsMode : status.config?.tlsMode || "starttls",
+        authMethod: connection.configured ? connection.authMethod : status.config?.authMethod || "plain",
+      }, { force, snapshot });
+      if (force) form.accept(this.editableIDs(this.EMAIL_EDITABLE_FIELDS), snapshot);
       const preview = root.querySelector("#feed-ranker-email-preview");
       if (preview) {
         preview.value = status.snapshot?.text ||
@@ -338,23 +365,31 @@ Zotero.FeedRankerPreferencePane = {
         : " " + (status.digestBuildError || previewState?.reason || "No digest preview is available yet.");
       this.setEmailStatus(root, credentialText + deliveryText + previewText);
     } catch (error) {
+      if (!form.isCurrent(token)) return;
       this.setEmailStatus(root, "Unable to load email status: " + String(error?.message || error));
     }
   },
 
   async saveEmailOptions(root) {
     const service = this.getEmailService();
+    const form = this.form(root);
+    const mainIDs = Object.values(this.fields);
+    const optionIDs = this.editableIDs(this.EMAIL_OPTION_FIELDS);
+    const snapshot = form.capture([...mainIDs, ...optionIDs]);
     try {
       // The weekly schedule lives in the main configuration, so this one button
       // saves both it and the digest options: they are one section on screen.
       const mainSaved = this.getService()?.saveConfig?.(this.readConfig(root));
-      if (mainSaved) this.writeConfig(root, mainSaved);
+      form.invalidate("email");
+      if (mainSaved) this.writeConfig(root, mainSaved, { force: true, snapshot });
       if (service?.saveConfig) {
         const saved = service.saveConfig(this.readEmailConfig(root));
-        this.writeEmailConfig(root, saved);
+        this.writeEmailConfig(root, saved, { force: true, snapshot });
       }
       // The edits are saved now, so the automatic refresh may own them again.
-      this.clearDirty(root, this.EMAIL_EDITABLE_FIELDS);
+      form.accept([...mainIDs, ...optionIDs], snapshot);
+      this.syncDayControl(root);
+      void this.populateEmail(root);
       const status = root.querySelector("#feed-ranker-save-status");
       if (status) status.value = "";
       this.setEmailStatus(root, "Digest settings saved. Automatic delivery still needs the standing approval above.");
@@ -415,10 +450,14 @@ Zotero.FeedRankerPreferencePane = {
       this.setSettingsFileStatus(root, service?.t?.("settings.unavailable") || "FeedRank is still starting.");
       return;
     }
+    const form = this.form(root);
+    const token = form.begin("settings-action");
+    const snapshot = form.capture(this.allEditableIDs());
     const result = await service.importSettingsFromFile(root.ownerGlobal || null);
+    if (!form.isCurrent(token)) return;
     if (result?.cancelled) return;
     if (result?.loaded) {
-      this.populate(root);
+      this.populate(root, { force: true, snapshot });
       const applied = (result.applied || []).join(", ") || "nothing";
       const lines = [result.ignored?.length
         ? service.t("settings.importedIgnored", { count: result.ignored.length })
@@ -438,9 +477,13 @@ Zotero.FeedRankerPreferencePane = {
       this.setSettingsFileStatus(root, service?.t?.("settings.unavailable") || "FeedRank is still starting.");
       return;
     }
+    const form = this.form(root);
+    const token = form.begin("settings-action");
+    const snapshot = form.capture(this.allEditableIDs());
     const result = await service.resetAllSettings(root.ownerGlobal || null);
+    if (!form.isCurrent(token)) return;
     if (result?.cancelled) return;
-    if (result?.reset) this.populate(root);
+    if (result?.reset) this.populate(root, { force: true, snapshot });
     // A partial reset must not read as a complete one: name what survived.
     const partial = result?.failures?.length
       ? " " + service.t("settings.resetPartial", { items: result.failures.join(", ") })
@@ -481,45 +524,53 @@ Zotero.FeedRankerPreferencePane = {
       this.setEmailStatus(root, "Enter the SMTP server, username, sender, recipient, and password first.");
       return;
     }
+    const form = this.form(root);
+    const ids = this.editableIDs([...this.EMAIL_CONNECTION_FIELDS, "secret"]);
+    const snapshot = form.capture(ids);
+    form.invalidate("email");
+    const token = form.begin("email-action");
     try {
       const result = await service.saveCredentials({
         secret: secret.value,
         ...this.readEmailConnection(root),
         parentWindow: root.ownerGlobal,
       });
+      if (!form.isCurrent(token)) return;
+      form.invalidate("email");
       this.setEmailStatus(root, result.warning || (result.persistent
         ? "Credentials saved in the isolated encrypted FeedRank Login Manager entry."
         : "Credentials are available for this Zotero session only."));
       // Saved, so the automatic refresh may own these controls again.
-      this.clearDirty(root, this.EMAIL_EDITABLE_FIELDS);
+      form.accept(this.editableIDs(this.EMAIL_CONNECTION_FIELDS), snapshot);
+      void this.populateEmail(root);
     } catch (error) {
+      if (!form.isCurrent(token)) return;
       this.setEmailStatus(root, "Credentials were not saved: " + String(error?.message || error));
     } finally {
       // Never retain or redisplay the raw secret in an ordinary settings field.
-      secret.value = "";
+      form.write("feed-ranker-email-secret", "", { force: true, snapshot });
     }
   },
 
   async clearEmailCredentials(root) {
     const service = this.getEmailService();
+    const form = this.form(root);
+    const ids = this.editableIDs([...this.EMAIL_CONNECTION_FIELDS, "secret"]);
+    const snapshot = form.capture(ids);
+    form.invalidate("email");
+    const token = form.begin("email-action");
     try {
       await service?.clearCredentials?.();
-      const secret = this.emailField(root, "secret");
-      const host = this.emailField(root, "host");
-      const port = this.emailField(root, "port");
-      const username = this.emailField(root, "username");
-      const from = this.emailField(root, "from");
-      const to = this.emailField(root, "to");
-      if (secret) secret.value = "";
-      if (host) host.value = "";
-      if (port) port.value = "";
-      if (username) username.value = "";
-      if (from) from.value = "";
-      if (to) to.value = "";
+      if (!form.isCurrent(token)) return;
+      form.invalidate("email");
+      for (const suffix of ["secret", "host", "port", "username", "from", "to"]) {
+        form.write("feed-ranker-email-" + suffix, "", { force: true, snapshot });
+      }
       // Cleared on purpose, so the protection must not keep the old values pinned.
-      this.clearDirty(root, this.EMAIL_EDITABLE_FIELDS);
+      form.accept(ids, snapshot);
       this.setEmailStatus(root, "FeedRank email credentials cleared.");
     } catch (error) {
+      if (!form.isCurrent(token)) return;
       this.setEmailStatus(root, "Credentials could not be cleared: " + String(error?.message || error));
     }
   },
@@ -707,14 +758,16 @@ Zotero.FeedRankerPreferencePane = {
     };
   },
 
-  writeJournalConfig(root, config = {}) {
-    const enabled = this.journalField(root, "enabled");
-    if (enabled) enabled.checked = config.lookupEnabled === true;
-    const refresh = this.journalField(root, "refresh");
-    if (refresh) refresh.checked = config.refreshBeforeScoring === true;
+  writeJournalConfig(root, config = {}, options = {}) {
+    this.form(root).write("feed-ranker-easyscholar-enabled", config.lookupEnabled, { ...options, checked: true });
+    this.form(root).write("feed-ranker-easyscholar-refresh", config.refreshBeforeScoring, { ...options, checked: true });
   },
 
-  async populateJournal(root) {
+  async populateJournal(root, { force = false, snapshot = null } = {}) {
+    const form = this.form(root);
+    const token = form.begin("journal");
+    const ids = ["feed-ranker-easyscholar-enabled", "feed-ranker-easyscholar-refresh"];
+    snapshot ||= force ? form.capture(ids) : null;
     const service = this.getJournalService();
     if (!service?.getStatus) {
       this.setJournalStatus(root, "Journal lookup is still starting.");
@@ -722,7 +775,9 @@ Zotero.FeedRankerPreferencePane = {
     }
     try {
       const status = await service.getStatus();
-      this.writeJournalConfig(root, status.config);
+      if (!form.isCurrent(token)) return;
+      this.writeJournalConfig(root, status.config, { force, snapshot });
+      if (force) form.accept(ids, snapshot);
       const configured = status.credentials?.configured === true;
       const enabled = status.config?.lookupEnabled === true;
       const credentialText = configured
@@ -736,6 +791,7 @@ Zotero.FeedRankerPreferencePane = {
       const cacheText = status.cacheSize ? " " + status.cacheSize + " journal(s) cached." : "";
       this.setJournalStatus(root, credentialText + " " + instruction + cacheText);
     } catch (error) {
+      if (!form.isCurrent(token)) return;
       this.setJournalStatus(root, "Unable to load journal status: " + String(error?.message || error));
     }
   },
@@ -743,9 +799,14 @@ Zotero.FeedRankerPreferencePane = {
   async saveJournalSettings(root) {
     const service = this.getJournalService();
     if (!service?.saveConfig) return;
+    const form = this.form(root);
+    const ids = ["feed-ranker-easyscholar-enabled", "feed-ranker-easyscholar-refresh"];
+    const snapshot = form.capture(ids);
     try {
       const config = service.saveConfig(this.readJournalConfig(root));
-      this.writeJournalConfig(root, config);
+      form.invalidate("journal");
+      this.writeJournalConfig(root, config, { force: true, snapshot });
+      form.accept(ids, snapshot);
       this.setJournalStatus(root, "Journal settings saved.");
     } catch (error) {
       this.setJournalStatus(root, "Journal settings were not saved: " + String(error?.message || error));
@@ -808,6 +869,7 @@ Zotero.FeedRankerPreferencePane = {
   init(root) {
     if (!root || root.dataset.feedRankerInitialized === "true") return;
     root.dataset.feedRankerInitialized = "true";
+    root.ownerGlobal?.addEventListener?.("unload", () => this.form(root).invalidate(), { once: true });
     void this.showConnectionLog(root);
     // Which build is running, in the group these three buttons live in.
     this.setSettingsFileStatus(root, this.getService()?.versionLabel?.() || "");
@@ -815,14 +877,17 @@ Zotero.FeedRankerPreferencePane = {
       const field = this.getField(root, name);
       field?.addEventListener("input", () => this.renderPromptPreview(root));
       field?.addEventListener("change", () => this.renderPromptPreview(root));
+      field?.addEventListener("command", () => this.renderPromptPreview(root));
     }
     // Protect the email controls from a repopulate resetting what the user is
     // editing — in particular the TLS-mode and authentication-method dropdowns,
     // whose popup closes if the value changes underneath it.
     this.markDirtyOnEdit(root, this.EMAIL_EDITABLE_FIELDS);
+    this.form(root).bind(this.allEditableIDs());
     const save = root.querySelector("#feed-ranker-save");
     save?.addEventListener("command", () => this.save(root));
     this.getField(root, "runFrequency")?.addEventListener("change", () => this.syncDayControl(root));
+    this.getField(root, "runFrequency")?.addEventListener("command", () => this.syncDayControl(root));
     root.querySelector("#feed-ranker-email-save-options")?.addEventListener("command", () => {
       void this.saveEmailOptions(root);
     });
@@ -966,6 +1031,6 @@ Zotero.FeedRankerPreferencePane = {
     } catch (_) {}
     // The pane's own labels, hints and buttons, in Zotero's UI language.
     this.getService()?.applyPaneStrings?.(root);
-    this.populate(root);
+    this.populate(root, { force: true });
   },
 };

@@ -1,4 +1,5 @@
 <vbox id="feed-ranker-preferences" class="main-section"
+      xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
       xmlns:html="http://www.w3.org/1999/xhtml"
       onload="Zotero.FeedRankerPreferencePane.init(this)"
       onshowing="Zotero.FeedRankerPreferencePane.populate(this)">
@@ -73,14 +74,12 @@
     }
     #feed-ranker-preferences .feed-ranker-form > .full-width { grid-column: 1 / -1; }
 
-    /* One box, one size. `font: inherit` keeps Zotero's own control font, and the
-       explicit height is what keeps a select from sitting a few pixels off the
-       text inputs beside it. */
+    /* Text inputs share a compact size. Native menus keep Zotero's own popup,
+       arrow, focus ring and internal padding rather than HTML-select styling. */
     #feed-ranker-preferences .feed-ranker-form input[type="text"],
     #feed-ranker-preferences .feed-ranker-form input[type="number"],
     #feed-ranker-preferences .feed-ranker-form input[type="password"],
-    #feed-ranker-preferences .feed-ranker-form input[type="email"],
-    #feed-ranker-preferences .feed-ranker-form select {
+    #feed-ranker-preferences .feed-ranker-form input[type="email"] {
       box-sizing: border-box;
       width: var(--feed-ranker-control);
       max-width: 100%;
@@ -90,10 +89,13 @@
       font: inherit;
       vertical-align: middle;
     }
-    /* A select in this build draws its own arrow inside the box; without this it
-       reserves more room and its text sits lower than a text input's. */
-    #feed-ranker-preferences .feed-ranker-form select {
-      padding-inline-end: 4px;
+    #feed-ranker-preferences .feed-ranker-form menulist {
+      box-sizing: border-box;
+      width: var(--feed-ranker-control);
+      max-width: 100%;
+      min-height: var(--feed-ranker-control-height);
+      margin: 0;
+      font: inherit;
     }
 
     /* ---- long text boxes: FULL WIDTH ------------------------------------ */
@@ -232,12 +234,14 @@
         <html:div class="feed-ranker-hint">Changing this profile invalidates matching cached scores; Zotero item metadata is never changed.</html:div>
       </html:div>
 
-      <html:label for="feed-ranker-language">Explanation language</html:label>
+      <html:label for="feed-ranker-language" id="feed-ranker-language-label">Explanation language</html:label>
       <html:div class="feed-ranker-ctl">
-        <html:select id="feed-ranker-language">
-          <html:option value="zh-CN">Chinese (Simplified)</html:option>
-          <html:option value="en">English</html:option>
-        </html:select>
+        <menulist id="feed-ranker-language" native="true" aria-labelledby="feed-ranker-language-label">
+          <menupopup>
+            <menuitem value="zh-CN" label="Chinese (Simplified)" data-i18n="dropdown.language.zh-CN"/>
+            <menuitem value="en" label="English" data-i18n="dropdown.language.en"/>
+          </menupopup>
+        </menulist>
       </html:div>
 
       <html:label for="feed-ranker-lookback">Lookback days (0–365)</html:label>
@@ -366,27 +370,31 @@
     <label><html:h2 id="feed-ranker-digest-group-title" class="feed-ranker-group-head" data-i18n="pane.preferences.email-digest">Email digest</html:h2></label>
     <description data-i18n="pane.preferences.on-the-repeat-you">On the repeat you choose, FeedRank updates the feeds, scores that period, and emails the digest. Direct SMTP over verified TLS.</description>
     <html:div class="feed-ranker-form">
-      <html:label for="feed-ranker-run-frequency">Repeat</html:label>
+      <html:label for="feed-ranker-run-frequency" id="feed-ranker-run-frequency-label">Repeat</html:label>
       <html:div class="feed-ranker-ctl">
-        <html:select id="feed-ranker-run-frequency">
-          <html:option value="daily">Daily</html:option>
-          <html:option value="weekly">Weekly</html:option>
-          <html:option value="monthly">Monthly</html:option>
-        </html:select>
+        <menulist id="feed-ranker-run-frequency" native="true" aria-labelledby="feed-ranker-run-frequency-label">
+          <menupopup>
+            <menuitem value="daily" label="Daily" data-i18n="dropdown.frequency.daily"/>
+            <menuitem value="weekly" label="Weekly" data-i18n="dropdown.frequency.weekly"/>
+            <menuitem value="monthly" label="Monthly" data-i18n="dropdown.frequency.monthly"/>
+          </menupopup>
+        </menulist>
         <html:div class="feed-ranker-hint">The digest covers one day, seven days, or thirty days of scores, matching this repeat.</html:div>
       </html:div>
 
-      <html:label for="feed-ranker-weekly-day">Run day</html:label>
+      <html:label for="feed-ranker-weekly-day" id="feed-ranker-weekly-day-label">Run day</html:label>
       <html:div class="feed-ranker-ctl">
-        <html:select id="feed-ranker-weekly-day">
-          <html:option value="1">Monday</html:option>
-          <html:option value="2">Tuesday</html:option>
-          <html:option value="3">Wednesday</html:option>
-          <html:option value="4">Thursday</html:option>
-          <html:option value="5">Friday</html:option>
-          <html:option value="6">Saturday</html:option>
-          <html:option value="0">Sunday</html:option>
-        </html:select>
+        <menulist id="feed-ranker-weekly-day" native="true" aria-labelledby="feed-ranker-weekly-day-label">
+          <menupopup>
+            <menuitem value="1" label="Monday" data-i18n="dropdown.weekday.1"/>
+            <menuitem value="2" label="Tuesday" data-i18n="dropdown.weekday.2"/>
+            <menuitem value="3" label="Wednesday" data-i18n="dropdown.weekday.3"/>
+            <menuitem value="4" label="Thursday" data-i18n="dropdown.weekday.4"/>
+            <menuitem value="5" label="Friday" data-i18n="dropdown.weekday.5"/>
+            <menuitem value="6" label="Saturday" data-i18n="dropdown.weekday.6"/>
+            <menuitem value="0" label="Sunday" data-i18n="dropdown.weekday.0"/>
+          </menupopup>
+        </menulist>
         <html:input id="feed-ranker-monthly-day" type="number" min="1" max="31" step="1" placeholder="1"/>
         <html:div class="feed-ranker-hint">Weekly uses the weekday; monthly uses the day of the month (31 runs on the last day of a short month).</html:div>
       </html:div>
@@ -461,21 +469,25 @@
         <html:input id="feed-ranker-email-port" type="number" min="1" max="65535" step="1" placeholder="587"/>
       </html:div>
 
-      <html:label for="feed-ranker-email-tls-mode">TLS mode</html:label>
+      <html:label for="feed-ranker-email-tls-mode" id="feed-ranker-email-tls-mode-label">TLS mode</html:label>
       <html:div class="feed-ranker-ctl">
-        <html:select id="feed-ranker-email-tls-mode">
-          <html:option value="starttls">STARTTLS (587)</html:option>
-          <html:option value="implicit">Implicit TLS (465/994)</html:option>
-        </html:select>
+        <menulist id="feed-ranker-email-tls-mode" native="true" aria-labelledby="feed-ranker-email-tls-mode-label">
+          <menupopup>
+            <menuitem value="starttls" label="STARTTLS (587)" data-i18n="dropdown.tls.starttls"/>
+            <menuitem value="implicit" label="Implicit TLS (465/994)" data-i18n="dropdown.tls.implicit"/>
+          </menupopup>
+        </menulist>
       </html:div>
 
-      <html:label for="feed-ranker-email-auth-method">Authentication method</html:label>
+      <html:label for="feed-ranker-email-auth-method" id="feed-ranker-email-auth-method-label">Authentication method</html:label>
       <html:div class="feed-ranker-ctl">
-        <html:select id="feed-ranker-email-auth-method">
-          <html:option value="plain">AUTH PLAIN</html:option>
-          <html:option value="login">AUTH LOGIN</html:option>
-          <html:option value="xoauth2">AUTH XOAUTH2</html:option>
-        </html:select>
+        <menulist id="feed-ranker-email-auth-method" native="true" aria-labelledby="feed-ranker-email-auth-method-label">
+          <menupopup>
+            <menuitem value="plain" label="AUTH PLAIN" data-i18n="dropdown.auth.plain"/>
+            <menuitem value="login" label="AUTH LOGIN" data-i18n="dropdown.auth.login"/>
+            <menuitem value="xoauth2" label="AUTH XOAUTH2" data-i18n="dropdown.auth.xoauth2"/>
+          </menupopup>
+        </menulist>
         <html:div class="feed-ranker-hint">The server's advertised list wins: FeedRank uses the strongest mechanism it offers.</html:div>
       </html:div>
 

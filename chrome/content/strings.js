@@ -581,6 +581,23 @@
    */
   const PANE_STATIC = {
     "zh-CN": {
+      "dropdown.language.zh-CN": "简体中文",
+      "dropdown.language.en": "英语",
+      "dropdown.frequency.daily": "每天",
+      "dropdown.frequency.weekly": "每周",
+      "dropdown.frequency.monthly": "每月",
+      "dropdown.weekday.1": "星期一",
+      "dropdown.weekday.2": "星期二",
+      "dropdown.weekday.3": "星期三",
+      "dropdown.weekday.4": "星期四",
+      "dropdown.weekday.5": "星期五",
+      "dropdown.weekday.6": "星期六",
+      "dropdown.weekday.0": "星期日",
+      "dropdown.tls.starttls": "STARTTLS (587)",
+      "dropdown.tls.implicit": "隐式 TLS (465/994)",
+      "dropdown.auth.plain": "AUTH PLAIN",
+      "dropdown.auth.login": "AUTH LOGIN",
+      "dropdown.auth.xoauth2": "AUTH XOAUTH2",
       "pane.preferences.connection": "连接",
       "pane.preferences.connection-log": "连接日志",
       "pane.preferences.email-connection-log": "邮件连接日志",
@@ -749,7 +766,15 @@
       for (const node of root.querySelectorAll("[data-i18n]")) {
         const value = statics[node.getAttribute("data-i18n")];
         if (value) {
-          node.textContent = value;
+          const kind = String(node.localName || node.tagName || "").split(":").pop().toLowerCase();
+          if (kind === "menuitem") {
+            // Native menus display a label attribute, not child text. Gecko
+            // observes selected-item label changes and updates the closed
+            // menulist without resetting its value or firing a user command.
+            node.setAttribute("label", value);
+          } else {
+            node.textContent = value;
+          }
           applied += 1;
         }
       }

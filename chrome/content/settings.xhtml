@@ -15,10 +15,9 @@
     body { font: message-box; margin: 16px; color: CanvasText; background: Canvas; overflow-x: auto; }
 
     /* ---- form controls -------------------------------------------------- */
-    /* One box, one size: every control is the same width and the same height, so
-       none is wider or taller than its neighbours, and a select cannot sit a few
-       pixels off the text inputs beside it. */
-    input[type="text"], input[type="number"], input[type="password"], input[type="email"], select {
+    /* Compact text inputs; menus retain Zotero's native popup, arrow, focus ring
+       and internal padding rather than HTML-select presentation rules. */
+    input[type="text"], input[type="number"], input[type="password"], input[type="email"] {
       box-sizing: border-box;
       font: inherit;
       width: 180px;
@@ -28,9 +27,14 @@
       padding: 0 6px;
       vertical-align: middle;
     }
-    /* A select must stay clickable and clearly a control, and must never be
-       overlapped by a neighbouring row. */
-    select { position: relative; z-index: 1; }
+    menulist {
+      box-sizing: border-box;
+      width: 180px;
+      max-width: 100%;
+      min-height: 26px;
+      margin: 0;
+      font: inherit;
+    }
     textarea { box-sizing: border-box; width: 100%; min-height: 150px; font: inherit; resize: vertical; }
 
     /* ---- section headings ----------------------------------------------- */
@@ -124,8 +128,15 @@
       <html:textarea id="profile"></html:textarea>
       <html:div class="hint">Changing the profile invalidates matching cached scores; Zotero item metadata is never changed.</html:div>
       <html:div class="grid">
-        <html:label for="language">Explanation language</html:label>
-        <html:div class="ctl"><html:select id="language"><html:option value="zh-CN">Chinese (Simplified)</html:option><html:option value="en">English</html:option></html:select></html:div>
+        <html:label for="language" id="language-label">Explanation language</html:label>
+        <html:div class="ctl">
+          <menulist id="language" native="true" aria-labelledby="language-label">
+            <menupopup>
+              <menuitem value="zh-CN" label="Chinese (Simplified)" data-i18n="dropdown.language.zh-CN"/>
+              <menuitem value="en" label="English" data-i18n="dropdown.language.en"/>
+            </menupopup>
+          </menulist>
+        </html:div>
 
         <html:label for="lookback">Lookback days (0–365)</html:label>
         <html:div class="ctl"><html:input id="lookback" type="number" min="0" max="365"/></html:div>
@@ -199,15 +210,31 @@
       <html:h2 data-i18n="pane.settings.email-digest">Email digest</html:h2>
       <html:div class="hint">On the repeat you choose, FeedRank updates the feeds, scores that period, and emails the digest. Direct SMTP over verified TLS.</html:div>
       <html:div class="grid">
-        <html:label for="run-frequency">Repeat</html:label>
+        <html:label for="run-frequency" id="run-frequency-label">Repeat</html:label>
         <html:div class="ctl">
-          <html:select id="run-frequency"><html:option value="daily">Daily</html:option><html:option value="weekly">Weekly</html:option><html:option value="monthly">Monthly</html:option></html:select>
+          <menulist id="run-frequency" native="true" aria-labelledby="run-frequency-label">
+            <menupopup>
+              <menuitem value="daily" label="Daily" data-i18n="dropdown.frequency.daily"/>
+              <menuitem value="weekly" label="Weekly" data-i18n="dropdown.frequency.weekly"/>
+              <menuitem value="monthly" label="Monthly" data-i18n="dropdown.frequency.monthly"/>
+            </menupopup>
+          </menulist>
           <html:div class="hint">The digest covers one day, seven days, or thirty days of scores, matching this repeat.</html:div>
         </html:div>
 
-        <html:label for="weekly-day">Run day</html:label>
+        <html:label for="weekly-day" id="weekly-day-label">Run day</html:label>
         <html:div class="ctl">
-          <html:select id="weekly-day"><html:option value="1">Monday</html:option><html:option value="2">Tuesday</html:option><html:option value="3">Wednesday</html:option><html:option value="4">Thursday</html:option><html:option value="5">Friday</html:option><html:option value="6">Saturday</html:option><html:option value="0">Sunday</html:option></html:select>
+          <menulist id="weekly-day" native="true" aria-labelledby="weekly-day-label">
+            <menupopup>
+              <menuitem value="1" label="Monday" data-i18n="dropdown.weekday.1"/>
+              <menuitem value="2" label="Tuesday" data-i18n="dropdown.weekday.2"/>
+              <menuitem value="3" label="Wednesday" data-i18n="dropdown.weekday.3"/>
+              <menuitem value="4" label="Thursday" data-i18n="dropdown.weekday.4"/>
+              <menuitem value="5" label="Friday" data-i18n="dropdown.weekday.5"/>
+              <menuitem value="6" label="Saturday" data-i18n="dropdown.weekday.6"/>
+              <menuitem value="0" label="Sunday" data-i18n="dropdown.weekday.0"/>
+            </menupopup>
+          </menulist>
           <html:input id="monthly-day" type="number" min="1" max="31" step="1" placeholder="1"/>
           <html:div class="hint">Weekly uses the weekday; monthly uses the day of the month (31 runs on the last day of a short month).</html:div>
         </html:div>
@@ -253,12 +280,25 @@
         <html:label for="email-port">SMTP port</html:label>
         <html:div class="ctl"><html:input id="email-port" type="number" min="1" max="65535" step="1" placeholder="587"/></html:div>
 
-        <html:label for="email-tls-mode">TLS mode</html:label>
-        <html:div class="ctl"><html:select id="email-tls-mode"><html:option value="starttls">STARTTLS (587)</html:option><html:option value="implicit">Implicit TLS (465/994)</html:option></html:select></html:div>
-
-        <html:label for="email-auth-method">Authentication method</html:label>
+        <html:label for="email-tls-mode" id="email-tls-mode-label">TLS mode</html:label>
         <html:div class="ctl">
-          <html:select id="email-auth-method"><html:option value="plain">AUTH PLAIN</html:option><html:option value="login">AUTH LOGIN</html:option><html:option value="xoauth2">AUTH XOAUTH2</html:option></html:select>
+          <menulist id="email-tls-mode" native="true" aria-labelledby="email-tls-mode-label">
+            <menupopup>
+              <menuitem value="starttls" label="STARTTLS (587)" data-i18n="dropdown.tls.starttls"/>
+              <menuitem value="implicit" label="Implicit TLS (465/994)" data-i18n="dropdown.tls.implicit"/>
+            </menupopup>
+          </menulist>
+        </html:div>
+
+        <html:label for="email-auth-method" id="email-auth-method-label">Authentication method</html:label>
+        <html:div class="ctl">
+          <menulist id="email-auth-method" native="true" aria-labelledby="email-auth-method-label">
+            <menupopup>
+              <menuitem value="plain" label="AUTH PLAIN" data-i18n="dropdown.auth.plain"/>
+              <menuitem value="login" label="AUTH LOGIN" data-i18n="dropdown.auth.login"/>
+              <menuitem value="xoauth2" label="AUTH XOAUTH2" data-i18n="dropdown.auth.xoauth2"/>
+            </menupopup>
+          </menulist>
           <html:div class="hint">The server's advertised list wins: FeedRank uses the strongest mechanism it offers.</html:div>
         </html:div>
 
@@ -317,5 +357,6 @@
       <html:div id="main-actions"><html:button id="cancel">Cancel</html:button><html:button id="save">Save and close</html:button></html:div>
     </html:main>
   </html:body>
+  <script src="chrome://feedranker/content/form-controls.js"/>
   <script src="chrome://feedranker/content/settings.js"/>
 </window>

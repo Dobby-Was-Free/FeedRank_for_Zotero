@@ -4,6 +4,38 @@ window.addEventListener("load", () => {
   const args = window.arguments?.[0] || {};
   const config = args.config || {};
   const field = (id) => document.getElementById(id);
+  const form = globalThis.FeedRankFormControls.create(document);
+  const mainFields = Object.freeze({
+    profile: "profile", explanationLanguage: "language", lookbackDays: "lookback",
+    candidateLimit: "limit", batchSize: "batch", batchConcurrency: "concurrency",
+    maxRetries: "retries", requestTimeoutMs: "timeout", runFrequency: "run-frequency",
+    weeklyRunDay: "weekly-day", monthlyRunDay: "monthly-day", weeklyRunTime: "weekly-time",
+    inputPricePerMillion: "input-price", outputPricePerMillion: "output-price", currency: "currency",
+    bibliometricWeightPoints: "bibliometric-weight", arxivSignificanceSignals: "arxiv-significance-signals",
+  });
+  const mainDefaults = Object.freeze({
+    profile: "", explanationLanguage: "zh-CN", lookbackDays: 14, candidateLimit: 20,
+    batchSize: 5, batchConcurrency: 1, maxRetries: 1, requestTimeoutMs: 120000,
+    runFrequency: "weekly", weeklyRunDay: 1, monthlyRunDay: 1, weeklyRunTime: "",
+    inputPricePerMillion: "", outputPricePerMillion: "", currency: "USD",
+    bibliometricWeightPoints: 0, arxivSignificanceSignals: "",
+  });
+  const mainIDs = Object.values(mainFields);
+  const emailOptionIDs = ["email-max-papers", "email-min-score", "email-priority-count",
+    "email-reading-count", "email-reading-enabled", "email-auto-enabled"];
+  const emailConnectionIDs = ["email-host", "email-port", "email-tls-mode", "email-auth-method",
+    "email-username", "email-from", "email-to"];
+  const emailIDs = [...emailOptionIDs, ...emailConnectionIDs];
+  const journalIDs = ["easyscholar-enabled", "easyscholar-refresh"];
+  const editableIDs = [...mainIDs, ...emailIDs, ...journalIDs];
+  form.bind(editableIDs);
+  window.addEventListener("unload", () => form.invalidate(), { once: true });
+  const readMainConfig = () => Object.fromEntries(Object.entries(mainFields)
+    .map(([name, id]) => [name, field(id).value]));
+  const beginReplacement = () => {
+    form.invalidate();
+    return { token: form.begin("settings-action"), snapshot: form.capture(editableIDs) };
+  };
   /*
    * One function fills the form, because importing a settings file or resetting changes the stored
    * settings while this window is open. The old code filled the form once from a snapshot and then
@@ -16,29 +48,17 @@ window.addEventListener("load", () => {
     field("monthly-day").style.display = frequency === "monthly" ? "" : "none";
   };
   showDayControl();
+  field("run-frequency").addEventListener("command", showDayControl);
   field("run-frequency").addEventListener("change", showDayControl);
-  const populateForm = (next = {}) => {
-    const config = next || {};
-    field("profile").value = config.profile || "";
-    field("language").value = config.explanationLanguage || "zh-CN";
-    field("lookback").value = config.lookbackDays ?? 14;
-    field("limit").value = config.candidateLimit ?? 20;
-    field("batch").value = config.batchSize ?? 5;
-    field("concurrency").value = config.batchConcurrency ?? 1;
-    field("retries").value = config.maxRetries ?? 1;
-    field("timeout").value = config.requestTimeoutMs ?? 120000;
-    field("run-frequency").value = config.runFrequency || "weekly";
-    field("weekly-day").value = String(config.weeklyRunDay ?? 1);
-    field("monthly-day").value = String(config.monthlyRunDay ?? 1);
-    field("weekly-time").value = config.weeklyRunTime || "";
-    field("input-price").value = config.inputPricePerMillion ?? "";
-    field("output-price").value = config.outputPricePerMillion ?? "";
-    field("currency").value = config.currency || "USD";
-    field("bibliometric-weight").value = config.bibliometricWeightPoints ?? 0;
-    field("arxiv-significance-signals").value = config.arxivSignificanceSignals || "";
+  const populateForm = (next = {}, options = {}) => {
+    for (const [name, id] of Object.entries(mainFields)) {
+      form.write(id, next?.[name] ?? mainDefaults[name], options);
+    }
     showDayControl();
   };
-  populateForm(args.config || {});
+  // Initial hydration is synchronous, before this listener returns control to
+  // the user. A default-focused field still needs its stored value displayed.
+  populateForm(args.config || {}, { force: true, snapshot: form.capture(mainIDs) });
 
   const emailService = window.opener?.Zotero?.FeedRankEmail || window.Zotero?.FeedRankEmail;
   const mainService = window.opener?.Zotero?.FeedRanker || window.Zotero?.FeedRanker;
@@ -66,15 +86,21 @@ window.addEventListener("load", () => {
     from: field("email-from").value,
     to: field("email-to").value,
   });
-  const writeEmailConfig = (email = {}) => {
-    field("email-max-papers").value = email.maximumPapers ?? 10;
-    field("email-min-score").value = email.minimumRelevanceScore ?? 70;
-    field("email-priority-count").value = email.priorityCount ?? 5;
-    field("email-reading-count").value = email.readingListCount ?? 30;
-    field("email-reading-enabled").checked = email.readingListEnabled === true;
-    field("email-auto-enabled").checked = email.automaticSendingEnabled === true;
-    field("email-tls-mode").value = email.tlsMode || "starttls";
-    field("email-auth-method").value = email.authMethod || "plain";
+  const writeEmailConfig = (email = {}, options = {}) => {
+    const { connectionModes = true, ...writeOptions } = options;
+    const values = {
+      "email-max-papers": email.maximumPapers ?? 10,
+      "email-min-score": email.minimumRelevanceScore ?? 70,
+      "email-priority-count": email.priorityCount ?? 5,
+      "email-reading-count": email.readingListCount ?? 30,
+    };
+    if (connectionModes) {
+      values["email-tls-mode"] = email.tlsMode || "starttls";
+      values["email-auth-method"] = email.authMethod || "plain";
+    }
+    for (const [id, value] of Object.entries(values)) form.write(id, value, writeOptions);
+    form.write("email-reading-enabled", email.readingListEnabled === true, { ...writeOptions, checked: true });
+    form.write("email-auto-enabled", email.automaticSendingEnabled === true, { ...writeOptions, checked: true });
   };
   // "Last email" is the one line the pane can answer with certainty, straight
   // from the retained submission record: when a message was last accepted (or
@@ -98,7 +124,9 @@ window.addEventListener("load", () => {
       : "";
     return "Last email: " + stamp + " — " + outcome + (where ? " · " + where : "") + note + ".";
   };
-  const populateEmail = async () => {
+  const populateEmail = async ({ force = false, snapshot = null } = {}) => {
+    const token = form.begin("email");
+    const revisions = snapshot || form.capture(emailIDs);
     if (!emailService?.getStatus) {
       emailStatus("Email delivery is unavailable in this settings window.");
       return;
@@ -110,18 +138,22 @@ window.addEventListener("load", () => {
       try {
         previewState = await mainService?.rebuildWeeklyDigest?.(window.opener || window) || null;
       } catch (_) {}
+      if (!form.isCurrent(token)) return;
       const status = await emailService.getStatus();
-      writeEmailConfig(status.config);
+      if (!form.isCurrent(token)) return;
       const connection = status.credentials || {};
+      const options = { force, snapshot: revisions };
+      // Apply each mode once: saved credential identity is authoritative, not
+      // the digest defaults that may differ from it while status is loading.
+      const emailConfig = { ...status.config };
       if (connection.configured) {
-        field("email-tls-mode").value = connection.tlsMode;
-        field("email-auth-method").value = connection.authMethod;
+        if (connection.tlsMode != null) emailConfig.tlsMode = connection.tlsMode;
+        if (connection.authMethod != null) emailConfig.authMethod = connection.authMethod;
       }
-      field("email-host").value = connection.host || "";
-      field("email-port").value = connection.port || "";
-      field("email-username").value = connection.username || "";
-      field("email-from").value = connection.from || "";
-      field("email-to").value = connection.to || "";
+      writeEmailConfig(emailConfig, options);
+      for (const name of ["host", "port", "username", "from", "to"]) {
+        form.write("email-" + name, connection[name] || "", options);
+      }
       field("email-preview").value = status.snapshot?.text ||
         (status.digestBuildError || previewState?.reason ||
           "No completed weekly digest is available yet. It appears after a scoring run with eligible papers.");
@@ -139,14 +171,14 @@ window.addEventListener("load", () => {
           : "") +
         (status.snapshot?.text ? "" : " " + (status.digestBuildError || previewState?.reason || "")));
     } catch (error) {
-      emailStatus("Unable to load email status: " + String(error?.message || error));
+      if (form.isCurrent(token)) emailStatus("Unable to load email status: " + String(error?.message || error));
     }
   };
   // The pane's own labels, hints and buttons, in Zotero's UI language.
   try {
     mainService?.applyPaneStrings?.(document);
   } catch (_) {}
-  writeEmailConfig();
+  writeEmailConfig(emailService?.loadConfig?.() || {});
   void populateEmail();
   /*
    * "Last email" follows the delivery, not this window.
@@ -172,15 +204,19 @@ window.addEventListener("load", () => {
   // ---- EasyScholar journal lookup ----------------------------------------
   const journalService = window.opener?.Zotero?.FeedRankJournal || window.Zotero?.FeedRankJournal;
   const journalStatus = (message) => { field("journal-status").textContent = String(message || ""); };
-  const populateJournal = async () => {
+  const populateJournal = async ({ force = false, snapshot = null } = {}) => {
+    const token = form.begin("journal");
+    const revisions = snapshot || form.capture(journalIDs);
     if (!journalService?.getStatus) {
       journalStatus("Journal lookup is unavailable in this settings window.");
       return;
     }
     try {
       const status = await journalService.getStatus();
-      field("easyscholar-enabled").checked = status.config?.lookupEnabled === true;
-      field("easyscholar-refresh").checked = status.config?.refreshBeforeScoring === true;
+      if (!form.isCurrent(token)) return;
+      const options = { force, checked: true, snapshot: revisions };
+      form.write("easyscholar-enabled", status.config?.lookupEnabled === true, options);
+      form.write("easyscholar-refresh", status.config?.refreshBeforeScoring === true, options);
       const configured = status.credentials?.configured === true;
       const enabled = status.config?.lookupEnabled === true;
       journalStatus(
@@ -195,17 +231,25 @@ window.addEventListener("load", () => {
             : "Ready. Use Update journal info from the feed or item menu."),
       );
     } catch (error) {
-      journalStatus("Unable to load journal status: " + String(error?.message || error));
+      if (form.isCurrent(token)) journalStatus("Unable to load journal status: " + String(error?.message || error));
     }
   };
   void populateJournal();
 
   field("journal-save").addEventListener("click", () => {
     try {
-      journalService?.saveConfig?.({
+      form.begin("journal");
+      const snapshot = form.capture(journalIDs);
+      const saved = journalService?.saveConfig?.({
         refreshBeforeScoring: field("easyscholar-refresh").checked === true,
         lookupEnabled: field("easyscholar-enabled").checked === true,
       });
+      if (saved) {
+        const options = { force: true, checked: true, snapshot };
+        form.write("easyscholar-enabled", saved.lookupEnabled === true, options);
+        form.write("easyscholar-refresh", saved.refreshBeforeScoring === true, options);
+      }
+      form.accept(journalIDs, snapshot);
       journalStatus("Journal settings saved.");
     } catch (error) {
       journalStatus("Journal settings were not saved: " + String(error?.message || error));
@@ -244,11 +288,7 @@ window.addEventListener("load", () => {
     try {
       preview.value = typeof args.buildPromptPreview === "function"
         ? args.buildPromptPreview({
-          ...config,
-          profile: field("profile").value,
-          explanationLanguage: field("language").value,
-          bibliometricWeightPoints: field("bibliometric-weight").value,
-          arxivSignificanceSignals: field("arxiv-significance-signals").value,
+          ...config, ...readMainConfig(),
         })
         : "Prompt preview is unavailable in this fallback settings dialog.";
     } catch (error) {
@@ -256,12 +296,22 @@ window.addEventListener("load", () => {
     }
   };
   field("profile").addEventListener("input", renderPromptPreview);
+  field("language").addEventListener("command", renderPromptPreview);
   field("language").addEventListener("change", renderPromptPreview);
   renderPromptPreview();
 
   field("email-save-options").addEventListener("click", () => {
     try {
-      writeEmailConfig(emailService?.saveConfig?.(readEmailConfig()));
+      form.invalidate("email");
+      const snapshot = form.capture([...mainIDs, ...emailIDs]);
+      const mainSaved = mainService?.saveConfig
+        ? mainService.saveConfig(readMainConfig()) : args.save?.(readMainConfig());
+      if (mainSaved) populateForm(mainSaved, { force: true, snapshot });
+      const emailSaved = emailService?.saveConfig?.(readEmailConfig());
+      if (emailSaved) writeEmailConfig(emailSaved, { force: true, snapshot, connectionModes: false });
+      form.accept([...mainIDs, ...emailOptionIDs], snapshot);
+      renderPromptPreview();
+      void populateEmail();
       emailStatus("Digest settings saved. Automatic delivery still needs the standing approval above.");
     } catch (error) {
       emailStatus("Digest settings were not saved: " + String(error?.message || error));
@@ -293,13 +343,23 @@ window.addEventListener("load", () => {
     }
   });
   field("settings-import").addEventListener("click", async () => {
+    const action = beginReplacement();
     try {
       const result = await mainService?.importSettingsFromFile?.(window);
-      if (result?.cancelled) return;
-      if (result?.loaded) {
-        populateForm(mainService?.loadConfig?.() || {});
+      if (!form.isCurrent(action.token)) return;
+      if (result?.cancelled) {
         void populateEmail();
         void populateJournal();
+        return;
+      }
+      if (result?.loaded) {
+        form.invalidate();
+        action.token = form.begin("settings-action");
+        form.accept(editableIDs, action.snapshot);
+        populateForm(mainService?.loadConfig?.() || {}, { force: true, snapshot: action.snapshot });
+        renderPromptPreview();
+        void populateEmail({ force: true, snapshot: action.snapshot });
+        void populateJournal({ force: true, snapshot: action.snapshot });
         const applied = (result.applied || []).join(", ") || "nothing";
         const lines = [result.ignored?.length
           ? mainService.t("settings.importedIgnored", { count: result.ignored.length })
@@ -308,17 +368,36 @@ window.addEventListener("load", () => {
         settingsFileStatus(lines.join(" "));
         return;
       }
+      void populateEmail();
+      void populateJournal();
       settingsFileStatus(mainService.t("settings.importFailed", { reason: result?.reason || "unknown" }));
     } catch (error) {
-      settingsFileStatus(String(error?.message || error));
+      if (form.isCurrent(action.token)) {
+        void populateEmail();
+        void populateJournal();
+        settingsFileStatus(String(error?.message || error));
+      }
     }
   });
   field("settings-reset").addEventListener("click", async () => {
+    const action = beginReplacement();
     try {
       const result = await mainService?.resetAllSettings?.(window);
-      if (result?.cancelled) return;
+      if (!form.isCurrent(action.token)) return;
+      if (result?.cancelled) {
+        void populateEmail();
+        void populateJournal();
+        return;
+      }
       if (result?.reset) {
-        populateForm(mainService?.loadConfig?.() || {});
+        form.invalidate();
+        action.token = form.begin("settings-action");
+        form.accept(editableIDs, action.snapshot);
+        populateForm(mainService?.loadConfig?.() || {}, { force: true, snapshot: action.snapshot });
+        renderPromptPreview();
+        void populateEmail({ force: true, snapshot: action.snapshot });
+        void populateJournal({ force: true, snapshot: action.snapshot });
+      } else {
         void populateEmail();
         void populateJournal();
       }
@@ -329,7 +408,11 @@ window.addEventListener("load", () => {
         ? mainService.t("settings.resetDone") + partial
         : mainService.t("settings.resetFailed", { reason: result?.reason || "unknown" }));
     } catch (error) {
-      settingsFileStatus(String(error?.message || error));
+      if (form.isCurrent(action.token)) {
+        void populateEmail();
+        void populateJournal();
+        settingsFileStatus(String(error?.message || error));
+      }
     }
   });
 
@@ -365,6 +448,9 @@ window.addEventListener("load", () => {
 
   field("email-save-credentials").addEventListener("click", async () => {
     const secret = field("email-secret");
+    form.invalidate("email");
+    const token = form.begin("email-action");
+    const snapshot = form.capture(emailConnectionIDs);
     try {
       if (!secret.value) throw new Error("Enter the SMTP server, username, sender, recipient, and password first.");
       const result = await emailService?.saveCredentials?.({
@@ -372,27 +458,34 @@ window.addEventListener("load", () => {
         ...readEmailConnection(),
         parentWindow: window.opener || window,
       });
+      if (!form.isCurrent(token)) return;
+      // Also retire status requests that started while secure storage awaited.
+      form.invalidate("email");
+      form.accept(emailConnectionIDs, snapshot);
       emailStatus(result?.warning || (result?.persistent
         ? "Credentials saved in the isolated encrypted FeedRank Login Manager entry."
         : "Credentials are available for this Zotero session only."));
     } catch (error) {
-      emailStatus("Credentials were not saved: " + String(error?.message || error));
+      if (form.isCurrent(token)) emailStatus("Credentials were not saved: " + String(error?.message || error));
     } finally {
       secret.value = "";
     }
   });
   field("email-clear-credentials").addEventListener("click", async () => {
+    form.invalidate("email");
+    const token = form.begin("email-action");
+    const connectionTextIDs = ["email-host", "email-port", "email-username", "email-from", "email-to"];
+    const snapshot = form.capture(connectionTextIDs);
     try {
       await emailService?.clearCredentials?.();
+      if (!form.isCurrent(token)) return;
+      form.invalidate("email");
       field("email-secret").value = "";
-      field("email-host").value = "";
-      field("email-port").value = "";
-      field("email-username").value = "";
-      field("email-from").value = "";
-      field("email-to").value = "";
+      for (const id of connectionTextIDs) form.write(id, "", { force: true, snapshot });
+      form.accept(connectionTextIDs, snapshot);
       emailStatus("FeedRank email credentials cleared.");
     } catch (error) {
-      emailStatus("Credentials could not be cleared: " + String(error?.message || error));
+      if (form.isCurrent(token)) emailStatus("Credentials could not be cleared: " + String(error?.message || error));
     }
   });
   // A connection test performs no MAIL FROM and transmits no message. It is a
@@ -568,25 +661,8 @@ window.addEventListener("load", () => {
   });
 
   field("save").addEventListener("click", () => {
-    args.save?.({
-      profile: field("profile").value,
-      explanationLanguage: field("language").value,
-      lookbackDays: field("lookback").value,
-      candidateLimit: field("limit").value,
-      batchSize: field("batch").value,
-      batchConcurrency: field("concurrency").value,
-      maxRetries: field("retries").value,
-      requestTimeoutMs: field("timeout").value,
-      runFrequency: field("run-frequency").value,
-      weeklyRunDay: field("weekly-day").value,
-      monthlyRunDay: field("monthly-day").value,
-      weeklyRunTime: field("weekly-time").value,
-      inputPricePerMillion: field("input-price").value,
-      outputPricePerMillion: field("output-price").value,
-      currency: field("currency").value,
-      bibliometricWeightPoints: field("bibliometric-weight").value,
-      arxivSignificanceSignals: field("arxiv-significance-signals").value,
-    });
+    form.invalidate();
+    args.save?.(readMainConfig());
     window.close();
   });
   field("cancel").addEventListener("click", () => window.close());

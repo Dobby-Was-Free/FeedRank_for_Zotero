@@ -3177,7 +3177,7 @@ test("native Zotero integrations register the settings pane, visible Score colum
   await runtime.service.registerNativeIntegrations();
   assert.equal(preferenceOptions.id, "feed-ranker-preferences");
   assert.match(preferenceOptions.src, /preferences\.xhtml$/);
-  assert.deepEqual(preferenceOptions.scripts.map((file) => file.replace(/^.*\//, "")), ["preferences.js"]);
+  assert.deepEqual(preferenceOptions.scripts.map((file) => file.replace(/^.*\//, "")), ["form-controls.js", "preferences.js"]);
   assert.equal(columnOptions.label, "Score");
   assert.deepEqual(columnOptions.enabledTreeIDs, ["main"]);
   assert.deepEqual(columnOptions.defaultIn, ["*"]);
@@ -4406,17 +4406,21 @@ test("both settings panes align every field in one label column and keep its box
       : Number(source.match(/grid-template-columns:\s*(\d+)px/)[1]);
     assert.ok(labelWidth <= 180, rel + " label column is too wide for the button rows: " + labelWidth);
 
-    // ONE box size for every control: a number, a text box, a password box, and a
-    // select share both the width and the height, so none is wider or taller than
-    // its neighbours.
+    // Text/number/password inputs keep their compact shared size. Native XUL
+    // menus share the width/minimum height but retain their own arrow/padding.
     const controlRule = source.match(
-      /input\[type="text"\],[\s\S]{0,600}?select\s*\{([^}]*)\}/,
+      /input\[type="text"\],[\s\S]{0,600}?input\[type="email"\]\s*\{([^}]*)\}/,
     );
     assert.ok(controlRule, rel + " must size every control together");
     const rule = controlRule[1];
     assert.match(rule, /width:\s*(var\(--feed-ranker-control\)|180px)/, rel + " must give every box one width");
     assert.match(rule, /height:\s*(var\(--feed-ranker-control-height\)|26px)/, rel + " must give every box one height");
     assert.match(rule, /box-sizing:\s*border-box/, rel + " must include the border in that size");
+    const menuRule = source.match(/menulist\s*\{([^}]*)\}/);
+    assert.ok(menuRule, rel + " must size native menus without HTML-select styling");
+    assert.match(menuRule[1], /width:\s*(var\(--feed-ranker-control\)|180px)/);
+    assert.match(menuRule[1], /min-height:\s*(var\(--feed-ranker-control-height\)|26px)/);
+    assert.doesNotMatch(menuRule[1], /(?:appearance|padding|z-index):/);
     // No type-specific width may survive to override it.
     assert.doesNotMatch(source, /input\[type="number"\]\s*\{\s*width/, rel + " must not single out number boxes");
 

@@ -54,6 +54,18 @@ and a file that cannot be read changes nothing at all.
 | **Re-read journal data before scoring** | Optional. A cached journal costs no request, and a failure never blocks scoring. |
 | **EasyScholar secret key** | Stored in an isolated encrypted Login Manager entry, never in a preference. A resolved journal is reused with no expiry, because its metrics do not change. |
 
+### Editing settings
+
+Language, repeat, weekday, TLS mode and authentication use Zotero's native menus.
+Opening or editing a control protects it from automatic pane/status refreshes.
+Digest approval and reading-list checkbox edits are protected the same way.
+Save the relevant section to keep your changes. **Save digest settings** also
+saves the schedule; **Save credentials** persists SMTP connection choices.
+Saving digest options alone does not replace the saved SMTP credentials.
+Import/reset intentionally reload saved values, while newer edits made during
+an asynchronous operation remain protected. The explanation language setting
+controls model output; interface labels follow Zotero's UI language.
+
 ### RSS refresh limits and skipping (0.3.2)
 
 RSS does not impose a universal connection timeout. Publishers can rate-limit

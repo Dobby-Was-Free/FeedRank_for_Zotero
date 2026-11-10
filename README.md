@@ -141,6 +141,11 @@ This stops FeedRank waiting; Zotero can still finish its native RSS work later.
 FeedRank avoids starting a duplicate update while its earlier call is pending.
 Skipped feeds are excluded from fallback/settle scans for that run.
 
+Settings use Zotero's native dropdown controls. Unsaved choices and consent
+checkboxes are protected from background status refreshes, including while a
+menu is open. Saving digest options does not replace unsaved SMTP connection
+choices; use **Save credentials** to persist the connection identity.
+
 Progress closes on completion or failure; manually requested results and email
 previews stay open for review. Large-state operations yield between chunks to
 reduce main-thread blocking. Some earlier builds cannot read current saved-state
@@ -163,7 +168,7 @@ For a bug report, include your operating system, Zotero and plugin versions, rep
 From a source checkout, use Node.js for the offline tests and PowerShell for the packaged build:
 
 ```powershell
-npm test                            # 347 offline tests: no network, no Zotero
+npm test                            # 372 offline tests: no network, no Zotero
 npm run benchmark                   # synthetic 2,000-paper cache; no live profile
 powershell -File tools\build.ps1    # -> dist\FeedRank-<version>.xpi
 ```
